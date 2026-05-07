@@ -1,0 +1,183 @@
+---
+
+export interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+
+const siteTitle = "进击的博客";
+const pageTitle = title ? `${title} · ${siteTitle}` : siteTitle;
+
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description ?? siteTitle} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{pageTitle}</title>
+    <link rel="stylesheet" href="/styles/global.css" />
+  </head>
+  <body>
+    <div class="bg-overlay"></div>
+
+    <header class="header">
+      <nav class="nav">
+        <a href="/" class="site-title">{siteTitle}</a>
+        <div class="nav-links">
+          <a href="/">首页</a>
+          <a href="/blog">文章</a>
+          <a href="/about">关于</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="main">
+      <div class="content-card">
+        <slot />
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p>&copy; {new Date().getFullYear()} {siteTitle}. All rights reserved.</p>
+    </footer>
+  </body>
+</html>
+
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --text: #e5e7eb;
+    --text-muted: #9ca3af;
+    --primary: #dc2626;
+    --primary-dim: rgba(220, 38, 38, 0.15);
+    --border: rgba(255, 255, 255, 0.08);
+    --card-bg: rgba(18, 18, 30, 0.75);
+    --card-border: rgba(255, 255, 255, 0.06);
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Noto Sans SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background-image: url("/images/aot-bg.jpg");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+
+  .bg-overlay {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      rgba(0, 0, 0, 0.82) 0%,
+      rgba(0, 0, 0, 0.45) 50%,
+      rgba(0, 0, 0, 0.75) 100%
+    );
+    z-index: 0;
+  }
+
+  .header {
+    position: relative;
+    z-index: 1;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 10, 15, 0.6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .site-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    text-decoration: none;
+    color: var(--text);
+    letter-spacing: 0.05em;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 1.25rem;
+  }
+
+  .nav-links a {
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    transition: color 0.2s;
+    letter-spacing: 0.03em;
+  }
+
+  .nav-links a:hover {
+    color: var(--primary);
+  }
+
+  .main {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem;
+  }
+
+  .content-card {
+    background: var(--card-bg);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 2.5rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .footer {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    padding: 2rem 1.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background: rgba(10, 10, 15, 0.4);
+  }
+
+  @media (max-width: 640px) {
+    .content-card {
+      padding: 1.5rem;
+      border-radius: 12px;
+    }
+
+    .main {
+      padding: 1rem;
+    }
+  }
+</style>

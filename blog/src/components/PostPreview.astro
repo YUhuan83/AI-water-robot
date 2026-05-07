@@ -1,0 +1,80 @@
+---
+import type { CollectionEntry } from "astro:content";
+
+export interface Props {
+  post: CollectionEntry<"posts">;
+}
+
+const { post } = Astro.props;
+const { title, description, pubDate, tags } = post.data;
+---
+
+<article class="post-card">
+  <time datetime={pubDate.toISOString()} class="post-date">
+    {pubDate.toLocaleDateString("zh-CN")}
+  </time>
+  <h2 class="post-title">
+    <a href={`/blog/${post.slug}`}>{title}</a>
+  </h2>
+  <p class="post-desc">{description}</p>
+  {
+    tags.length > 0 && (
+      <div class="post-tags">
+        {tags.map((tag) => <span class="tag">{tag}</span>)}
+      </div>
+    )
+  }
+</article>
+
+<style>
+  .post-card {
+    padding: 1.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .post-card:first-of-type {
+    padding-top: 0;
+  }
+
+  .post-date {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .post-title {
+    margin: 0.25rem 0 0.5rem;
+    font-size: 1.5rem;
+  }
+
+  .post-title a {
+    text-decoration: none;
+    color: var(--text);
+    transition: color 0.2s;
+  }
+
+  .post-title a:hover {
+    color: var(--primary);
+  }
+
+  .post-desc {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+  }
+
+  .post-tags {
+    margin-top: 0.5rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 0.8rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(220, 38, 38, 0.1);
+    color: var(--primary);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+  }
+</style>

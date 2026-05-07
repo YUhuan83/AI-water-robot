@@ -1,0 +1,30 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { getCollection } from "astro:content";
+import PostPreview from "../../components/PostPreview.astro";
+
+const posts = await getCollection("posts", ({ data }) => !data.draft);
+posts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+---
+
+<BaseLayout title="文章" description="所有博客文章">
+  <h1>所有文章</h1>
+
+  {posts.length > 0 ? (
+    posts.map((post) => <PostPreview post={post} />)
+  ) : (
+    <p class="empty">暂无文章，敬请期待。</p>
+  )}
+</BaseLayout>
+
+<style>
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .empty {
+    color: var(--text-muted);
+    padding: 2rem 0;
+  }
+</style>
