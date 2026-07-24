@@ -408,3 +408,193 @@ def render_grid_as_image(
                 draw.text((x1 + 2, y1 + 2), label, fill="#ffffff")
 
     return img
+
+
+# ============================================================
+# 可编辑场景 -- 用户自定义障碍物、起点、途经点
+# ============================================================
+
+class EditableScene:
+    """可编辑场景，存储用户通过 UI 点击构建的自定义网格状态"""
+
+    def __init__(self, size: int = 20):
+        self.size = size
+        self.grid = np.zeros((size, size), dtype=int)
+        self.robot_pos = None
+        self.waypoints = []
+        self.trash_positions = []
+
+    def set_cell(self, row: int, col: int, mode: str):
+        """根据画笔模式设置网格单元格"""
+        if not (0 <= row < self.size and 0 <= col < self.size):
+            return
+
+        self.waypoints = [wp for wp in self.waypoints if wp != (row, col)]
+        self.trash_positions = [tp for tp in self.trash_positions if tp != (row, col)]
+
+        if mode == "clear":
+            self.grid[row, col] = WATER
+            if self.robot_pos == (row, col):
+                self.robot_pos = None
+            return
+
+        if mode == "obstacle":
+            if self.robot_pos == (row, col):
+                self.robot_pos = None
+            self.grid[row, col] = OBSTACLE
+
+        elif mode == "start":
+            if self.robot_pos is not None:
+                old_r, old_c = self.robot_pos
+                self.grid[old_r, old_c] = WATER
+            self.robot_pos = (row, col)
+            self.grid[row, col] = WATER
+
+        elif mode == "waypoint":
+            if (row, col) not in self.waypoints:
+                self.waypoints.append((row, col))
+            self.grid[row, col] = BUOY
+
+        elif mode == "trash":
+            if (row, col) not in self.trash_positions:
+                self.trash_positions.append((row, col))
+            self.grid[row, col] = TRASH
+
+    def reset(self):
+        """清空场景"""
+        self.grid = np.zeros((self.size, self.size), dtype=int)
+        self.robot_pos = None
+        self.waypoints = []
+        self.trash_positions = []
+
+    def to_water_grid(self):
+        """将可编辑场景转换为 WaterGrid 实例"""
+        wg = WaterGrid(self.size)
+        for r in range(self.size):
+            for c in range(self.size):
+                if self.grid[r, c] == OBSTACLE:
+                    wg.place_object(r, c, OBSTACLE)
+        for r, c in self.waypoints:
+            wg.place_object(r, c, BUOY)
+        for r, c in self.trash_positions:
+            wg.place_object(r, c, TRASH)
+        if self.robot_pos is not None:
+            wg.place_object(*self.robot_pos, ROBOT)
+        return wg
+
+    def get_targets(self):
+        """获取所有目标点（途经点 + 垃圾）"""
+        return self.waypoints + self.trash_positions
+
+    def to_json(self) -> str:
+        """导出场景为 JSON 字符串"""
+        import json
+        obstacles = [(int(r), int(c))
+                      for r, c in zip(*np.where(self.grid == OBSTACLE))]
+        return json.dumps({
+            "size": self.size,
+            "obstacles": obstacles,
+            "robot": self.robot_pos,
+            "waypoints": self.waypoints,
+            "trash": self.trash_positions,
+        }, ensure_ascii=False)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "EditableScene":
+        """从 JSON 字符串恢复场景"""
+        import json
+        data = json.loads(json_str)
+        scene = cls(data["size"])
+        for r, c in data.get("obstacles", []):
+            scene.grid[r, c] = OBSTACLE
+        if data.get("robot"):
+            scene.robot_pos = tuple(data["robot"])
+        for r, c in data.get("waypoints", []):
+            scene.waypoints.append((r, c))
+            scene.grid[r, c] = BUOY
+        for r, c in data.get("trash", []):
+            scene.trash_positions.append((r, c))
+            scene.grid[r, c] = TRASH
+        return scene
+
+
+def render_editable_grid(scene, figsize=(7, 6)):
+    """渲染可编辑场景为 matplotlib Figure（供 gr.Plot 交互点击）"""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle, Rectangle
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=90)
+    size = scene.size
+
+    ax.set_facecolor("#0d4f6b")
+    ax.set_xlim(-1, size + 1)
+    ax.set_ylim(-1, size + 1)
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.set_xticks(range(size))
+    ax.set_yticks(range(size))
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.tick_params(length=0)
+
+    for i in range(size + 1):
+        ax.axhline(i, color="#1a6a8a", linewidth=0.4, alpha=0.5)
+        ax.axvline(i, color="#1a6a8a", linewidth=0.4, alpha=0.5)
+
+    for r in range(size):
+        for c in range(size):
+            if scene.grid[r, c] == OBSTACLE:
+                ax.add_patch(Rectangle(
+                    (c - 0.45, r - 0.45), 0.9, 0.9,
+                    facecolor="#5c3a1e", edgecolor="#3a1a0a",
+                    linewidth=1.5, zorder=3,
+                ))
+
+    for i, (r, c) in enumerate(scene.waypoints):
+        ax.add_patch(Circle(
+            (c, r), 0.35, facecolor="#00cc66",
+            edgecolor="#ffffff", linewidth=1.5, alpha=0.9, zorder=4,
+        ))
+        ax.annotate(str(i + 1), (c, r), color="white",
+                     fontsize=7, fontweight="bold", ha="center", va="center", zorder=5)
+
+    for r, c in scene.trash_positions:
+        ax.add_patch(Circle(
+            (c, r), 0.3, facecolor="#ff9900",
+            edgecolor="#ff4400", linewidth=1.5, alpha=0.9, zorder=4,
+        ))
+
+    if scene.robot_pos is not None:
+        r, c = scene.robot_pos
+        ax.add_patch(Circle(
+            (c, r), 0.4, facecolor="#00ccff",
+            edgecolor="#ffffff", linewidth=2, zorder=5,
+        ))
+        ax.annotate("Start", (c, r), color="white",
+                     fontsize=8, fontweight="bold", ha="center", va="center", zorder=6)
+
+    n_obs = int(np.sum(scene.grid == OBSTACLE))
+    n_wp = len(scene.waypoints)
+    n_tr = len(scene.trash_positions)
+    ax.set_title(
+        f"Obstacles: {n_obs} | Waypoints: {n_wp} | Targets: {n_tr} | "
+        f"Start: {scene.robot_pos or 'not set'}",
+        color="#c0d8e0", fontsize=10, pad=8,
+    )
+
+    legend_elements = [
+        plt.Line2D([0], [0], marker='s', color='w', markerfacecolor='#5c3a1e',
+                    markersize=10, label='Obstacle'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#00cc66',
+                    markersize=10, label='Waypoint'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#ff9900',
+                    markersize=10, label='Target'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#00ccff',
+                    markersize=10, label='Start'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right',
+              facecolor='#0a1628', edgecolor='#1a3a4a',
+              labelcolor='#c0d8e0', fontsize=8)
+
+    fig.tight_layout()
+    return fig

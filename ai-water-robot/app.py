@@ -1,7 +1,8 @@
 """
 水域智能感知与任务理解系统 — Gradio 主应用
 
-四 Tab 界面：
+Tab 界面：
+  0. 自定义场景 — 点击网格放置障碍物、起点、途经点
   1. 任务输入 — 自然语言指令 + 预设场景 + LLM 任务拆解
   2. 目标检测 — 水面场景图像 + YOLO 检测标注
   3. 路径规划 — A* 路径可视化
@@ -19,8 +20,9 @@ import gradio as gr
 
 from environment.water_grid import (
     WaterGrid, render_grid_as_image, PRESET_SCENES,
+    EditableScene, render_editable_grid,
 )
-from environment.water_grid import OBSTACLE, BUOY, TRASH, ROBOT
+from environment.water_grid import OBSTACLE, BUOY, TRASH, ROBOT, WATER
 from planning.astar import plan_multi_point_route, compute_path_length
 from task_planner.llm_planner import TaskPlanner, rule_based_plan
 from visualization.renderer import SimulationRenderer, render_static_path
@@ -38,6 +40,8 @@ def process_pipeline(
     preset_scene_name: str,
     use_llm: bool = False,
     grid_size: int = DEFAULT_GRID_SIZE,
+    use_custom: bool = False,
+    custom_scene_json: str = "",
     progress=gr.Progress(),
 ) -> tuple:
     """
@@ -47,15 +51,23 @@ def process_pipeline(
         (任务规划文本, 场景图像, 检测标注图像, 检测结果表,
          路径图, 路径文本, GIF动画, 任务报告)
     """
-    results = {}  # 存储中间结果，出错时返回已完成的步骤
+    results = {}
 
     try:
         # ── 步骤 1: 生成水面场景 ──
         progress(0.05, desc="生成水面场景...")
-        scene_func = PRESET_SCENES.get(preset_scene_name)
-        if scene_func is None:
-            scene_func = list(PRESET_SCENES.values())[0]
-        scene = scene_func(grid_size)
+        if use_custom and custom_scene_json:
+            # 使用自定义场景
+            editable = EditableScene.from_json(custom_scene_json)
+            scene = editable.to_water_grid()
+            scene_name_display = "自定义场景"
+        else:
+            # 使用预设场景
+            scene_func = PRESET_SCENES.get(preset_scene_name)
+            if scene_func is None:
+                scene_func = list(PRESET_SCENES.values())[0]
+            scene = scene_func(grid_size)
+            scene_name_display = preset_scene_name
         results["scene"] = scene
 
         # 渲染场景为图像
@@ -160,7 +172,7 @@ def process_pipeline(
         report = (
             f"## 任务完成报告\n\n"
             f"**执行指令:** {user_instruction}\n\n"
-            f"**场景:** {preset_scene_name}\n\n"
+            f"**场景:** {scene_name_display}\n\n"
             f"**任务规划:**\n{plan_text}\n\n"
             f"**检测结果:** 发现 {len(det_table)} 个目标物体\n\n"
             f"**路径规划:** {len(path)} 步, 总距离 {path_length}\n\n"
@@ -255,6 +267,64 @@ def on_scene_change(scene_name: str) -> tuple:
 
 
 # ═══════════════════════════════════════════════════════════
+# 自定义场景编辑回调
+# ═══════════════════════════════════════════════════════════
+
+def on_grid_click(evt: gr.SelectData, scene_json: str, brush_mode: str):
+    """
+    处理网格点击事件：根据画笔模式更新场景
+    gr.Image.select 返回点击的像素坐标 (x, y)，需换算为网格坐标
+    """
+    if evt is None or evt.index is None:
+        if scene_json:
+            img = _render_custom_scene_img(scene_json)
+            return scene_json, img
+        return scene_json, None
+
+    # evt.index 是 (x, y) 像素坐标
+    px_x = evt.index[0]
+    px_y = evt.index[1]
+    img_size = 500  # 渲染图片的像素大小
+
+    # 读取场景大小
+    if scene_json:
+        scene = EditableScene.from_json(scene_json)
+    else:
+        scene = EditableScene(20)
+
+    # 像素 → 网格坐标
+    cell = img_size / scene.size
+    col = int(px_x / cell)
+    row = int(px_y / cell)
+
+    scene.set_cell(row, col, brush_mode)
+    new_json = scene.to_json()
+    img = _render_custom_scene_img(new_json)
+    return new_json, img
+
+
+def _render_custom_scene_img(scene_json: str):
+    """将自定义场景 JSON 渲染为 PIL Image（供 gr.Image 显示）"""
+    if not scene_json:
+        return None
+    scene = EditableScene.from_json(scene_json)
+    wg = scene.to_water_grid()
+    return render_grid_as_image(wg, img_size=500, show_labels=True)
+
+
+def on_custom_reset(grid_size: int = 20):
+    """重置自定义场景"""
+    scene = EditableScene(grid_size)
+    img = _render_custom_scene_img(scene.to_json())
+    return scene.to_json(), img
+
+
+def on_grid_size_change(new_size: int):
+    """网格大小变化时重置场景"""
+    return on_custom_reset(new_size)
+
+
+# ═══════════════════════════════════════════════════════════
 # Gradio 界面构建
 # ═══════════════════════════════════════════════════════════
 
@@ -338,16 +408,57 @@ def build_ui():
             visible=False,
         )
 
-        # ── 四 Tab 结果 ──
+        # ── Tab 结果 ──
         with gr.Tabs():
-            with gr.TabItem("任务规划", id=0):
+            # ═══ Tab 0: 自定义场景 ═══
+            with gr.TabItem("自定义场景", id=0):
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        custom_grid_img = gr.Image(
+                            label="点击网格放置物体（先选画笔模式，再点图）",
+                            value=_render_custom_scene_img(EditableScene(20).to_json()),
+                            type="pil",
+                            height=420,
+                        )
+                    with gr.Column(scale=1):
+                        brush_mode = gr.Radio(
+                            label="画笔模式",
+                            choices=["obstacle", "start", "waypoint", "trash", "clear"],
+                            value="obstacle",
+                            type="value",
+                        )
+                        gr.Markdown("""
+                        **操作说明:**
+                        - 选择画笔模式后，点击左侧网格图放置物体
+                        - `obstacle` — 障碍物（不可通行）
+                        - `start` — 机器人起点
+                        - `waypoint` — 途经点（按编号顺序经过）
+                        - `trash` — 目标/垃圾（要收集）
+                        - `clear` — 清除该格
+                        """)
+                        custom_reset_btn = gr.Button("重置场景", variant="secondary")
+                        use_custom_checkbox = gr.Checkbox(
+                            label="使用自定义场景执行任务",
+                            value=True,
+                            info="勾选后，执行任务将使用此场景而非预设场景",
+                        )
+                        custom_size_slider = gr.Slider(
+                            label="网格大小（修改后自动重置）",
+                            minimum=10, maximum=30, value=20, step=5,
+                        )
+                # 存储自定义场景的 JSON 状态
+                custom_scene_state = gr.State(
+                    EditableScene(20).to_json()
+                )
+
+            with gr.TabItem("任务规划", id=1):
                 plan_output = gr.Textbox(
                     label="LLM 任务拆解结果",
                     lines=12,
                     placeholder="点击「执行任务」后显示...",
                 )
 
-            with gr.TabItem("目标检测", id=1):
+            with gr.TabItem("目标检测", id=2):
                 with gr.Row():
                     with gr.Column():
                         scene_img_output = gr.Image(
@@ -391,6 +502,27 @@ def build_ui():
 
         # ── 事件绑定 ──
 
+        # 自定义场景 — 网格点击
+        custom_grid_img.select(
+            fn=on_grid_click,
+            inputs=[custom_scene_state, brush_mode],
+            outputs=[custom_scene_state, custom_grid_img],
+        )
+
+        # 自定义场景 — 重置
+        custom_reset_btn.click(
+            fn=on_custom_reset,
+            inputs=[custom_size_slider],
+            outputs=[custom_scene_state, custom_grid_img],
+        )
+
+        # 自定义场景 — 网格大小变化时自动重置
+        custom_size_slider.change(
+            fn=on_grid_size_change,
+            inputs=[custom_size_slider],
+            outputs=[custom_scene_state, custom_grid_img],
+        )
+
         # 场景切换 → 更新指令和预览
         scene_dropdown.change(
             fn=on_scene_change,
@@ -406,6 +538,8 @@ def build_ui():
                 scene_dropdown,
                 use_llm_checkbox,
                 grid_slider,
+                use_custom_checkbox,
+                custom_scene_state,
             ],
             outputs=[
                 plan_output,
