@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river
 from planning.astar3d import plan_tsp_3d, compute_3d_path_cost
+from data.water_adapter import load_water_data
 from config import OUTPUT_DIR
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -277,6 +278,9 @@ class Panel:
         g1 = ttk.LabelFrame(f, text="数据加载", padding=6)
         g1.pack(fill=tk.X, pady=3)
         ttk.Button(g1, text="打开 JSON 文件...", width=w, command=self._load_json).pack(fill=tk.X, pady=2)
+        ttk.Button(g1, text="打开原始数据 (CSV/XYZ/TXT)...", width=w,
+                   command=self._load_raw).pack(fill=tk.X, pady=1)
+        ttk.Separator(g1, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=3)
         ttk.Button(g1, text="演示: 沿海水域", width=w, command=self._load_coastal).pack(fill=tk.X, pady=1)
         ttk.Button(g1, text="演示: 内河航道", width=w, command=self._load_river).pack(fill=tk.X, pady=1)
 
@@ -321,6 +325,38 @@ class Panel:
                 self.viewer.load(Water3DGrid.from_json(p))
             except Exception as e:
                 messagebox.showerror("加载失败", str(e))
+
+    def _load_raw(self):
+        """加载原始数据 (CSV/XYZ/TXT 等)，自动检测格式"""
+        p = filedialog.askopenfilename(
+            title="选择原始水深数据文件",
+            filetypes=[
+                ("所有支持的格式", "*.csv;*.xyz;*.txt;*.json"),
+                ("CSV 文件", "*.csv"),
+                ("XYZ 点云", "*.xyz"),
+                ("文本矩阵", "*.txt"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not p:
+            return
+        try:
+            # 尝试找到同目录下的水流文件
+            cur_path = None
+            base_dir = os.path.dirname(p)
+            for cand in ["currents.txt", "currents.csv", "flow.txt"]:
+                test_path = os.path.join(base_dir, cand)
+                if os.path.exists(test_path):
+                    cur_path = test_path
+                    break
+            grid = load_water_data(p, currents_path=cur_path, resolution=100, nz=10)
+            self.viewer.load(grid)
+            msg = f"已加载: {os.path.basename(p)}"
+            if cur_path:
+                msg += f" + {os.path.basename(cur_path)}"
+            self.lbl_d.config(text=msg)
+        except Exception as e:
+            messagebox.showerror("加载失败", f"无法解析文件:\n{e}\n\n支持的格式: CSV, XYZ, 纯文本矩阵, JSON")
 
     def _load_coastal(self):
         self.viewer.load(demo_3d_coastal())

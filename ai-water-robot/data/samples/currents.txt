@@ -1,0 +1,4 @@
+# 水流数据 - 三层
+layer surface dx=0.5 dy=-0.3 dz=0.0 speed=0.6
+layer mid dx=0.2 dy=-0.1 dz=0.0 speed=0.3
+layer bottom dx=0.0 dy=0.0 dz=0.0 speed=0.05
