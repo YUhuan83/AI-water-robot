@@ -486,91 +486,129 @@ class MainWindow(QMainWindow):
         if not self.path3d or len(self.path3d) < 2:
             self.status_bar.showMessage("请先加载数据并规划路径")
             return
+        # 清理旧动画
+        self._anim_cleanup()
         self.anim_frame = 0
         self.anim_playing = True
+        self.anim_trail = []
+        # 创建动画机器人（小船形状）
+        p0 = self.path3d[0]
+        x0, y0, z0 = p0[0], p0[1], -p0[2]
+        self.anim_robot = self.plotter.add_mesh(
+            self.pv.Sphere(center=(x0, y0, z0), radius=0.45),
+            color="#ff4400", pbr=True, metallic=0.2, roughness=0.3, name="robot",
+        )
         self._show_fov()
         if self.anim_timer is None:
             self.anim_timer = QTimer(self)
             self.anim_timer.timeout.connect(self._anim_tick)
-        self.anim_timer.start(80)
-        self.status_bar.showMessage("路径动画播放中...")
+        self.anim_timer.start(60)  # 60fps 流畅
+        self.status_bar.showMessage("路径动画播放中... (拖拽视角可观察)")
 
     def _anim_pause(self):
         self.anim_playing = False
         if self.anim_timer:
             self.anim_timer.stop()
-        self.status_bar.showMessage("动画已暂停")
+        self.status_bar.showMessage("动画已暂停 — 点击播放继续")
 
     def _anim_stop(self):
         self.anim_playing = False
         if self.anim_timer:
             self.anim_timer.stop()
-        self.anim_frame = 0
-        if self.anim_robot:
-            self.plotter.remove_actor(self.anim_robot)
-            self.anim_robot = None
-        if self.fov_actor:
-            self.plotter.remove_actor(self.fov_actor)
-            self.fov_actor = None
+        self._anim_cleanup()
         self.status_bar.showMessage("动画已停止")
+
+    def _anim_cleanup(self):
+        self.anim_frame = 0
+        for name in ["robot", "fov", "wake", "anim_trail"]:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+        self.anim_robot = None
+        self.fov_actor = None
 
     def _anim_tick(self):
         if not self.anim_playing or not self.path3d:
             return
-        self.anim_frame += 1
-        if self.anim_frame >= len(self.path3d):
+        self.anim_frame += self.anim_speed
+        idx = int(self.anim_frame)
+        if idx >= len(self.path3d) - 1:
             self.anim_playing = False
             if self.anim_timer:
                 self.anim_timer.stop()
-            self.status_bar.showMessage("路径动画完成")
+            self.status_bar.showMessage("路径动画完成 — 点击播放重放")
             return
-        p = self.path3d[self.anim_frame]
-        x, y, z = p[0], p[1], -p[2]
+
+        # 当前和下一个点，线性插值平滑
+        p_cur = self.path3d[idx]
+        p_nxt = self.path3d[min(idx + 1, len(self.path3d) - 1)]
+        frac = self.anim_frame - idx
+        x = p_cur[0] + (p_nxt[0] - p_cur[0]) * frac
+        y = p_cur[1] + (p_nxt[1] - p_cur[1]) * frac
+        z_raw = p_cur[2] + (p_nxt[2] - p_cur[2]) * frac
+
+        # 波浪起伏效果：z 随时间和位置微微波动
+        wave_z = 0.06 * math.sin(x * 1.2 + self.wave_time * 3) * math.cos(y * 1.0 + self.wave_time * 2.5)
+        z = -z_raw + wave_z
+
+        # 朝向
+        if idx + 1 < len(self.path3d):
+            dx_f = p_nxt[0] - p_cur[0]
+            dy_f = p_nxt[1] - p_cur[1]
+
+        # 更新机器人位置
         if self.anim_robot:
             self.plotter.remove_actor(self.anim_robot)
+        robot = self.pv.Sphere(center=(x, y, z), radius=0.45)
         self.anim_robot = self.plotter.add_mesh(
-            self.pv.Sphere(center=(x, y, z), radius=0.4),
-            color="#ff4400", pbr=True, name="robot_anim",
+            robot, color="#ff4400", pbr=True, metallic=0.2, roughness=0.3, name="robot",
         )
-        # 更新 FOV
-        self._update_fov(p)
-        # 显示渐显路径
-        if self.anim_frame % 5 == 0:
-            partial = np.array([[q[0], q[1], -q[2]] for q in self.path3d[:self.anim_frame + 1]], dtype=np.float64)
+
+        # 更新 FOV 朝向
+        self._update_fov((x, y, -z_raw), dx_f if idx + 1 < len(self.path3d) else 1.0,
+                         dy_f if idx + 1 < len(self.path3d) else 0.0)
+
+        # 尾迹：每隔几帧添加一个衰减点
+        if idx % 4 == 0:
+            wake_dot = self.plotter.add_mesh(
+                self.pv.Sphere(center=(x, y, z + 0.05), radius=0.08),
+                color="#88ccff", opacity=0.5, name=f"wake_{idx}",
+            )
+            self.anim_trail.append(wake_dot)
+        # 衰减旧尾迹
+        for w in self.anim_trail:
+            try:
+                w.GetProperty().SetOpacity(max(0.05, w.GetProperty().GetOpacity() - 0.03))
+            except Exception:
+                pass
+
+        # 路径渐显
+        if idx % 8 == 0:
+            partial = np.array([[q[0], q[1], -q[2]] for q in self.path3d[:idx + 1]], dtype=np.float64)
             if len(partial) >= 2:
                 try:
-                    self.plotter.add_mesh(
-                        self.pv.Spline(partial, n_points=len(partial) * 2).tube(radius=0.10),
-                        color="#ff6600", name="anim_path_trail", pbr=True,
-                    )
+                    tube = self.pv.Spline(partial, n_points=max(len(partial), 3) * 2).tube(radius=0.08)
+                    self.plotter.add_mesh(tube, color="#ff9944", name="anim_trail", opacity=0.7, pbr=True)
                 except Exception:
                     pass
 
     def _show_fov(self):
-        """显示传感器视野范围"""
         if self.fov_actor:
             self.plotter.remove_actor(self.fov_actor)
         if self.path3d:
             p = self.path3d[0]
-            x, y, z = p[0], p[1], -p[2]
-            cone = self.pv.Cone(center=(x, y, z), direction=(1, 0, 0), height=3.0, radius=1.5, resolution=16)
-            self.fov_actor = self.plotter.add_mesh(cone, color="#ffaa00", opacity=0.25, name="fov")
+            cone = self.pv.Cone(center=(p[0], p[1], -p[2]), direction=(1, 0, 0),
+                                 height=3.5, radius=1.8, resolution=20)
+            self.fov_actor = self.plotter.add_mesh(cone, color="#ffcc44", opacity=0.22, name="fov")
 
-    def _update_fov(self, p):
-        """更新传感器视野位置"""
+    def _update_fov(self, pos, dx, dy):
         if self.fov_actor:
             self.plotter.remove_actor(self.fov_actor)
-        x, y, z = p[0], p[1], -p[2]
-        # 根据路径方向确定朝向
-        if self.anim_frame + 1 < len(self.path3d):
-            nxt = self.path3d[self.anim_frame + 1]
-            dx, dy = nxt[0] - p[0], nxt[1] - p[1]
-            mag = (dx * dx + dy * dy) ** 0.5 or 1.0
-            dx, dy = dx / mag, dy / mag
-        else:
-            dx, dy = 1.0, 0.0
-        cone = self.pv.Cone(center=(x, y, z), direction=(dx, dy, 0), height=3.0, radius=1.5, resolution=16)
-        self.fov_actor = self.plotter.add_mesh(cone, color="#ffaa00", opacity=0.25, name="fov")
+        mag = (dx * dx + dy * dy) ** 0.5 or 1.0
+        cone = self.pv.Cone(center=pos, direction=(dx / mag, dy / mag, 0.05),
+                             height=3.5, radius=1.8, resolution=20)
+        self.fov_actor = self.plotter.add_mesh(cone, color="#ffcc44", opacity=0.22, name="fov")
 
     # ═══════════════════ 撤销 ═══════════════════
 
