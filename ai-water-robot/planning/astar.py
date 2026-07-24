@@ -200,3 +200,92 @@ def path_to_directions(path: List[Tuple[int, int]]) -> List[str]:
         elif dr == 1 and dc == 1:
             directions.append("↘")
     return directions
+
+
+def _euclidean_dist(a: Tuple[int, int], b: Tuple[int, int]) -> float:
+    """两点间欧几里得距离"""
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+
+def plan_tsp_route(
+    obstacle_grid: np.ndarray,
+    start: Tuple[int, int],
+    targets: List[Tuple[int, int]],
+    end: Optional[Tuple[int, int]] = None,
+    two_opt_iterations: int = 50,
+) -> Optional[List[Tuple[int, int]]]:
+    """
+    统一巡回路径规划：从 start 出发，经过所有 targets，到 end（或回到 start）
+
+    1. 用 nearest-neighbor 构建初始访问顺序
+    2. 用 2-opt 局部搜索优化访问顺序（消除路径交叉）
+    3. 为每对相邻目标用 A* 计算实际网格路径
+    4. 拼接返回完整路径
+
+    Args:
+        obstacle_grid: 障碍物网格
+        start: 起点
+        targets: 所有需要访问的目标点
+        end: 终点（默认 None = 回到 start）
+        two_opt_iterations: 2-opt 迭代次数
+
+    Returns:
+        完整路径点列表，或 None
+    """
+    if not targets:
+        return None
+
+    # ── 1. 构建初始顺序（nearest-neighbor） ──
+    remaining = list(targets)
+    order = [start]
+    current = start
+    while remaining:
+        nearest_idx = min(
+            range(len(remaining)),
+            key=lambda i: _euclidean_dist(current, remaining[i]),
+        )
+        current = remaining.pop(nearest_idx)
+        order.append(current)
+
+    # ── 2. 2-opt 优化访问顺序 ──
+    if len(order) >= 4:  # 至少 start + 2 targets + 1 才有效
+        n = len(order)
+        for _ in range(two_opt_iterations):
+            improved = False
+            for i in range(1, n - 2):
+                for j in range(i + 1, n - 1):
+                    # 如果交换边 (i-1,i) 和 (j,j+1) 能缩短距离
+                    old_dist = (
+                        _euclidean_dist(order[i - 1], order[i])
+                        + _euclidean_dist(order[j], order[j + 1])
+                    )
+                    new_dist = (
+                        _euclidean_dist(order[i - 1], order[j])
+                        + _euclidean_dist(order[i], order[j + 1])
+                    )
+                    if new_dist < old_dist - 0.001:
+                        # 翻转 order[i..j]
+                        order[i:j + 1] = reversed(order[i:j + 1])
+                        improved = True
+            if not improved:
+                break
+
+    # ── 3. 为每对相邻点用 A* 计算实际路径 ──
+    full_path = []
+    for idx in range(len(order) - 1):
+        segment = astar(obstacle_grid, order[idx], order[idx + 1])
+        if segment is None:
+            return None
+        if full_path:
+            full_path.extend(segment[1:])  # 跳过重复的连接点
+        else:
+            full_path = segment
+
+    # ── 4. 如果指定了终点且不同于最后一个目标，追加最后一段 ──
+    if end is not None and end != order[-1]:
+        final_segment = astar(obstacle_grid, order[-1], end)
+        if final_segment is None:
+            return None
+        full_path.extend(final_segment[1:])
+
+    return full_path

@@ -713,5 +713,78 @@
       ],
       "summary": "扫描+避障+巡检：标记水草、绕行、检查浮标"
     }
+  },
+  {
+    "id": "tsp_01",
+    "instruction": "从开始点出发经过所有途径点的同时收集垃圾，然后回到码头，要求路径最短",
+    "keywords": ["开始点", "途径点", "收集", "垃圾", "码头", "回到", "路径最短"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描所有垃圾和途经点位置"},
+        {"action": "navigate", "target": "area", "reason": "从起点出发，按最短路径依次经过所有途经点并收集沿途垃圾"},
+        {"action": "navigate", "target": "dock", "reason": "完成任务后返回码头"}
+      ],
+      "summary": "巡回收集：从起点出发，经过所有途经点时收集垃圾，最短路径返回码头"
+    }
+  },
+  {
+    "id": "tsp_02",
+    "instruction": "规划一条最短路径，从基地出发，访问所有浮标并收集垃圾，最后返回基地",
+    "keywords": ["最短路径", "基地", "访问", "浮标", "收集", "垃圾", "返回"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描所有浮标和垃圾位置"},
+        {"action": "navigate", "target": "buoy", "reason": "从基地出发，按最短路径依次访问所有浮标"},
+        {"action": "collect", "target": "trash", "reason": "途经每个位置时收集垃圾"},
+        {"action": "navigate", "target": "dock", "reason": "访问完所有浮标后返回基地"}
+      ],
+      "summary": "TSP巡回：从基地出发，访问所有浮标并收集垃圾，返回基地"
+    }
+  },
+  {
+    "id": "tsp_03",
+    "instruction": "找出从码头经过所有目标点再回到码头的最短路线",
+    "keywords": ["码头", "所有", "目标点", "最短", "路线", "回到"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "anomaly", "reason": "获取所有目标点的位置坐标"},
+        {"action": "navigate", "target": "area", "reason": "从码头出发，按TSP最优路径依次经过所有目标点"},
+        {"action": "navigate", "target": "dock", "reason": "完成所有目标后返回码头"}
+      ],
+      "summary": "最优巡回：从码头出发，按最短路径经过所有目标点，返回码头"
+    }
+  },
+  {
+    "id": "tsp_04",
+    "instruction": "先去各个浮标检查，顺便把路上的垃圾都捡了，干完活回码头",
+    "keywords": ["浮标", "检查", "垃圾", "捡", "回码头"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描定位所有垃圾和浮标"},
+        {"action": "navigate", "target": "buoy", "reason": "按最短路线依次前往各浮标并沿途收集垃圾"},
+        {"action": "inspect", "target": "buoy", "reason": "到达每个浮标时执行巡检"},
+        {"action": "collect", "target": "trash", "reason": "收集沿途所有垃圾"},
+        {"action": "navigate", "target": "dock", "reason": "任务完成后返回码头"}
+      ],
+      "summary": "巡检+收集巡回：按最优路线检查浮标、收集垃圾、返回码头"
+    }
+  },
+  {
+    "id": "tsp_05",
+    "instruction": "从当前位置出发，把所有漂流物打捞上来，然后去码头卸货",
+    "keywords": ["当前位置", "漂流物", "打捞", "码头", "卸货"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描水域定位所有漂流物"},
+        {"action": "collect", "target": "trash", "reason": "按最短路径依次打捞所有漂流物"},
+        {"action": "navigate", "target": "dock", "reason": "打捞完成后前往码头卸载"}
+      ],
+      "summary": "打捞+卸货：最短路径打捞所有漂流物，到码头卸货"
+    }
   }
 ]

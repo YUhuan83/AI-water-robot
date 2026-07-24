@@ -66,7 +66,7 @@ class WaterGrid:
         self.grid = np.zeros((size, size), dtype=int)
         self.objects: Dict[Tuple[int, int], str] = {}  # {(row, col): type_name}
         self.robot_pos: Optional[Tuple[int, int]] = None
-        self.home_pos: Optional[Tuple[int, int]] = None  # 码头/基地位置
+        self.dock_pos: Optional[Tuple[int, int]] = None  # 码头/基地/终点
 
     def place_object(self, row: int, col: int, obj_type: int) -> bool:
         """
@@ -83,13 +83,13 @@ class WaterGrid:
             return False
 
         if obj_type == ROBOT:
-            # 机器人：先清除旧位置
             if self.robot_pos is not None:
                 old_r, old_c = self.robot_pos
                 self.grid[old_r, old_c] = WATER
                 self.objects.pop((old_r, old_c), None)
             self.robot_pos = (row, col)
-            self.home_pos = (row, col)  # 初始位置也是基地
+            if self.dock_pos is None:
+                self.dock_pos = (row, col)  # 首次放机器人时设为码头
 
         self.grid[row, col] = obj_type
         self.objects[(row, col)] = TYPE_NAMES[obj_type]

@@ -230,7 +230,7 @@ def rule_based_plan(user_instruction: str) -> Dict:
     """
     instruction = user_instruction.lower()
     tasks = []
-    has_return = any(w in instruction for w in ["返回", "回去", "码头", "回港"])
+    has_return = any(w in instruction for w in ["返回", "回去", "码头", "回港", "回到"])
 
     # 清理类
     has_cleanup = any(w in instruction for w in ["清理", "收集", "垃圾", "清除", "捞", "打捞"])

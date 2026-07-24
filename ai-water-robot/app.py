@@ -23,7 +23,7 @@ from environment.water_grid import (
     EditableScene, render_editable_grid,
 )
 from environment.water_grid import OBSTACLE, BUOY, TRASH, ROBOT, WATER
-from planning.astar import plan_multi_point_route, compute_path_length
+from planning.astar import plan_multi_point_route, compute_path_length, plan_tsp_route
 from task_planner.llm_planner import TaskPlanner, rule_based_plan
 from visualization.renderer import SimulationRenderer, render_static_path
 from config import DEFAULT_GRID_SIZE, OUTPUT_DIR
@@ -119,32 +119,33 @@ def process_pipeline(
             det_table = _grid_objects_as_table(scene)
         results["det_table"] = det_table
 
-        # ── 步骤 4: A* 路径规划 ──
-        progress(0.50, desc="A* 路径规划...")
+        # ── 步骤 4: A* 路径规划（统一巡回 + 最短路径）──
+        progress(0.50, desc="A* 路径规划（TSP优化）...")
         obs_grid = scene.get_obstacle_grid()
         robot_pos = scene.robot_pos
         if robot_pos is None:
             robot_pos = (0, 0)
 
-        # 根据任务选择目标点
+        # 合并所有目标：途经点 + 垃圾
         trash_positions = scene.get_object_positions(TRASH)
         buoy_positions = scene.get_object_positions(BUOY)
+        all_targets = trash_positions + buoy_positions
 
-        # 选择目标点（优先垃圾，其次浮标）
-        target_positions = trash_positions if trash_positions else buoy_positions
+        if not all_targets:
+            return _error_result("场景中没有可执行任务的目标物体", results)
 
-        if not target_positions:
-            return _error_result("场景中没有可执行任务的目标物体（垃圾或浮标）", results)
-
-        path = plan_multi_point_route(obs_grid, robot_pos, target_positions)
+        # 使用 TSP 巡回规划（支持返回码头）
+        dock = scene.dock_pos
+        path = plan_tsp_route(obs_grid, robot_pos, all_targets, end=dock)
         if path is None:
-            return _error_result("无法找到可行路径：目标可能被障碍物完全包围", results)
+            return _error_result("无法找到可行路径", results)
 
         path_length = compute_path_length(path)
         path_text = (
-            f"路径规划完成\n"
+            f"路径规划完成 (TSP 2-opt 优化)\n"
             f"起点: {robot_pos}\n"
-            f"途经目标点: {len(target_positions)} 个\n"
+            f"途经目标点: {len(all_targets)} 个\n"
+            f"终点: {dock or robot_pos}\n"
             f"总步数: {len(path)}\n"
             f"总距离: {path_length}"
         )
@@ -153,7 +154,7 @@ def process_pipeline(
         path_preview_path = os.path.join(OUTPUT_DIR, "path_preview.png")
         render_static_path(
             scene, path, path_preview_path,
-            title=f"A* 路径规划 (距离={path_length}, 步数={len(path)})",
+            title="A* TSP Path (dist={}, steps={})".format(path_length, len(path)),
             show_indices=(len(path) > 4),
         )
 
@@ -163,22 +164,23 @@ def process_pipeline(
         gif_path = os.path.join(OUTPUT_DIR, "simulation.gif")
         renderer.render_gif(
             path, gif_path, fps=12, interval=120,
-            collect_targets=target_positions,
+            collect_targets=all_targets,
         )
 
         # ── 步骤 6: 任务报告 ──
         progress(0.95, desc="生成任务报告...")
-        collected = len(target_positions)
+        total_targets = len(all_targets)
         report = (
             f"## 任务完成报告\n\n"
             f"**执行指令:** {user_instruction}\n\n"
             f"**场景:** {scene_name_display}\n\n"
             f"**任务规划:**\n{plan_text}\n\n"
             f"**检测结果:** 发现 {len(det_table)} 个目标物体\n\n"
-            f"**路径规划:** {len(path)} 步, 总距离 {path_length}\n\n"
-            f"**执行结果:** 成功抵达 {collected} 个目标点\n\n"
+            f"**路径规划:** TSP 2-opt 优化, {len(path)} 步, 总距离 {path_length}\n"
+            f"**终点:** {dock or robot_pos}\n\n"
+            f"**执行结果:** 成功经过 {total_targets} 个目标点\n\n"
             f"---\n"
-            f"*系统由 DeepSeek LLM + YOLOv8 + A* 算法驱动*"
+            f"*系统由 DeepSeek LLM + YOLOv8 + A* + 2-opt TSP 驱动*"
         )
 
         progress(1.0, desc="完成!")
@@ -576,7 +578,7 @@ if __name__ == "__main__":
     print("=" * 60)
     demo.launch(
         server_name="127.0.0.1",
-        server_port=7860,
+        server_port=7861,
         share=False,  # 如需公网链接改为 True
         show_error=True,
         css=APP_CSS,
