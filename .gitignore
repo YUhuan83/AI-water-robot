@@ -3,3 +3,4 @@ __pycache__/
 blog/node_modules/
 blog/.astro/
 blog/dist/
+ai-water-robot/output/

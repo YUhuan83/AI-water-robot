@@ -1,0 +1,6 @@
+gradio>=5
+ultralytics
+openai
+numpy
+matplotlib
+Pillow
