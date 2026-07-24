@@ -1,0 +1,717 @@
+[
+  {
+    "id": "cleanup_01",
+    "instruction": "清理河道里的所有漂浮垃圾，避开障碍物",
+    "keywords": ["清理", "垃圾", "避开", "障碍物"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描水域，定位所有漂浮垃圾"},
+        {"action": "avoid", "target": "obstacle", "reason": "规划路径时绕开障碍物"},
+        {"action": "collect", "target": "trash", "reason": "依次前往每个垃圾位置进行收集"}
+      ],
+      "summary": "垃圾清理任务：检测漂浮垃圾，规划避障路径，逐一收集"
+    }
+  },
+  {
+    "id": "cleanup_02",
+    "instruction": "帮我把水面上的塑料瓶和杂物清理掉",
+    "keywords": ["清理", "塑料瓶", "杂物", "水面"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "识别水面上的塑料瓶和其他漂浮杂物"},
+        {"action": "navigate", "target": "trash", "reason": "移动到最近的垃圾位置"},
+        {"action": "collect", "target": "trash", "reason": "逐一收集所有检测到的垃圾"}
+      ],
+      "summary": "水面清理任务：识别并收集所有漂浮杂物"
+    }
+  },
+  {
+    "id": "cleanup_03",
+    "instruction": "这河道上好多垃圾，去收一下，注意别撞石头",
+    "keywords": ["垃圾", "收", "撞", "石头"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "探测河道上的所有垃圾位置"},
+        {"action": "avoid", "target": "obstacle", "reason": "避开石头等障碍物防止碰撞"},
+        {"action": "collect", "target": "trash", "reason": "收集所有垃圾"}
+      ],
+      "summary": "河道垃圾清理：探测、避障、收集"
+    }
+  },
+  {
+    "id": "cleanup_04",
+    "instruction": "清除港口附近漂浮的油污和废弃物",
+    "keywords": ["清除", "港口", "油污", "废弃物"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "前往港口区域"},
+        {"action": "detect", "target": "trash", "reason": "检测港口附近的油污和废弃物"},
+        {"action": "collect", "target": "trash", "reason": "清理检测到的所有污染物"}
+      ],
+      "summary": "港口清洁任务：导航到港口，检测并清理污染物"
+    }
+  },
+  {
+    "id": "cleanup_05",
+    "instruction": "把湖中间那几个塑料袋捞起来",
+    "keywords": ["湖", "塑料袋", "捞"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "trash", "reason": "驶向湖中央塑料袋所在位置"},
+        {"action": "collect", "target": "trash", "reason": "打捞塑料袋"}
+      ],
+      "summary": "打捞任务：前往湖中央打捞塑料袋"
+    }
+  },
+  {
+    "id": "cleanup_06",
+    "instruction": "从上游往下游走，一路清理漂浮物",
+    "keywords": ["上游", "下游", "清理", "漂浮物"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "从上往下沿河道行进"},
+        {"action": "detect", "target": "trash", "reason": "行进过程中持续检测漂浮物"},
+        {"action": "collect", "target": "trash", "reason": "发现漂浮物立即收集"}
+      ],
+      "summary": "沿河清理：顺流而下，边行进边检测收集"
+    }
+  },
+  {
+    "id": "cleanup_07",
+    "instruction": "清理3号到7号浮标之间的水域垃圾",
+    "keywords": ["清理", "浮标", "之间", "垃圾"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "前往3号浮标作为起点"},
+        {"action": "detect", "target": "trash", "reason": "在3号到7号浮标之间扫描垃圾"},
+        {"action": "avoid", "target": "obstacle", "reason": "避开区域内的障碍物"},
+        {"action": "collect", "target": "trash", "reason": "收集区间内所有垃圾"}
+      ],
+      "summary": "区域清理：在指定浮标区间内检测并清理垃圾"
+    }
+  },
+  {
+    "id": "cleanup_08",
+    "instruction": "去水库那头把漂着的死鱼清理一下",
+    "keywords": ["水库", "死鱼", "清理"],
+    "category": "cleanup",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "驶向水库指定区域"},
+        {"action": "detect", "target": "anomaly", "reason": "检测水面异常物体（死鱼）"},
+        {"action": "collect", "target": "trash", "reason": "清理所有检测到的异常物体"}
+      ],
+      "summary": "水库清理：前往目标区域检测并清理异常物体"
+    }
+  },
+  {
+    "id": "inspection_01",
+    "instruction": "从码头出发，依次检查1号和3号浮标，然后返回码头",
+    "keywords": ["码头", "检查", "浮标", "返回"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "从码头出发前往1号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查1号浮标的状态"},
+        {"action": "navigate", "target": "buoy", "reason": "从1号浮标航行至3号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查3号浮标的状态"},
+        {"action": "navigate", "target": "dock", "reason": "巡检完毕，返回码头"}
+      ],
+      "summary": "浮标巡检：依次检查1号和3号浮标，完成后返回码头"
+    }
+  },
+  {
+    "id": "inspection_02",
+    "instruction": "巡查所有浮标，看看有没有损坏的",
+    "keywords": ["巡查", "浮标", "损坏"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "依次前往所有浮标位置"},
+        {"action": "inspect", "target": "buoy", "reason": "检查每个浮标是否有损坏"},
+        {"action": "report", "target": "anomaly", "reason": "发现损坏浮标时立即标记并报告"}
+      ],
+      "summary": "全面巡检：依次检查所有浮标状态，损坏的即时报告"
+    }
+  },
+  {
+    "id": "inspection_03",
+    "instruction": "去检查一下昨天发现的那个可疑目标",
+    "keywords": ["检查", "可疑", "目标"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "anomaly", "reason": "前往可疑目标所在位置"},
+        {"action": "inspect", "target": "anomaly", "reason": "近距离观察确认目标性质"},
+        {"action": "report", "target": "anomaly", "reason": "将检查结果生成报告"}
+      ],
+      "summary": "可疑目标排查：前往、检查、报告"
+    }
+  },
+  {
+    "id": "inspection_04",
+    "instruction": "定期巡检5号到9号浮标，记录状态",
+    "keywords": ["定期", "巡检", "浮标", "记录"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "从5号浮标开始依次前往各浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "对每个浮标执行状态检查"},
+        {"action": "report", "target": "buoy", "reason": "记录所有浮标的状态信息"}
+      ],
+      "summary": "定期巡检：检查5-9号浮标并记录状态"
+    }
+  },
+  {
+    "id": "inspection_05",
+    "instruction": "顺着岸边走，检查堤坝有没有裂缝",
+    "keywords": ["岸边", "堤坝", "裂缝", "检查"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "沿着岸边缓慢巡航"},
+        {"action": "inspect", "target": "area", "reason": "检查堤坝表面是否有裂缝或破损"},
+        {"action": "report", "target": "anomaly", "reason": "发现裂缝时标记位置并生成报告"}
+      ],
+      "summary": "堤坝巡检：沿岸巡航检查堤坝完整性"
+    }
+  },
+  {
+    "id": "inspection_06",
+    "instruction": "看看码头那边停的船都还好吗",
+    "keywords": ["码头", "船", "看看"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "驶向码头区域"},
+        {"action": "inspect", "target": "boat", "reason": "检查停泊船只的状态"},
+        {"action": "report", "target": "boat", "reason": "报告各船只的状态"}
+      ],
+      "summary": "码头巡检：检查停泊船只状态"
+    }
+  },
+  {
+    "id": "inspection_07",
+    "instruction": "排查一下这片水域有没有漏油",
+    "keywords": ["排查", "水域", "漏油"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "巡航目标水域"},
+        {"action": "detect", "target": "anomaly", "reason": "检测水面是否有油污迹象"},
+        {"action": "report", "target": "anomaly", "reason": "发现漏油立即报告位置和范围"}
+      ],
+      "summary": "环境排查：巡航检测水面漏油情况"
+    }
+  },
+  {
+    "id": "inspection_08",
+    "instruction": "检查水下管道的连接处，看有没有松动",
+    "keywords": ["水下", "管道", "连接", "松动"],
+    "category": "inspection",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "前往管道连接处所在位置"},
+        {"action": "inspect", "target": "area", "reason": "近距离检查管道连接处是否松动"},
+        {"action": "report", "target": "anomaly", "reason": "记录检查详情并生成维护建议"}
+      ],
+      "summary": "管道检查：前往并检查水下管道连接处"
+    }
+  },
+  {
+    "id": "patrol_01",
+    "instruction": "巡逻整个水域，发现并标记所有异常物体",
+    "keywords": ["巡逻", "水域", "异常", "标记"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "按照预设航线覆盖整个水域"},
+        {"action": "detect", "target": "anomaly", "reason": "持续扫描，发现任何异常物体"},
+        {"action": "report", "target": "anomaly", "reason": "标记异常物体位置并生成巡逻报告"}
+      ],
+      "summary": "水域巡逻：全覆盖巡航，检测并标记所有异常物体"
+    }
+  },
+  {
+    "id": "patrol_02",
+    "instruction": "今晚在河道巡逻，留意可疑船只",
+    "keywords": ["巡逻", "河道", "可疑", "船只"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "沿河道进行夜间巡逻"},
+        {"action": "detect", "target": "boat", "reason": "检测并识别河道上的船只"},
+        {"action": "inspect", "target": "boat", "reason": "靠近可疑船只进行观察"},
+        {"action": "report", "target": "anomaly", "reason": "发现可疑船只时记录并报告"}
+      ],
+      "summary": "夜间巡逻：巡河检测并识别可疑船只"
+    }
+  },
+  {
+    "id": "patrol_03",
+    "instruction": "围着这个小岛转一圈，看看有没有非法捕鱼的",
+    "keywords": ["小岛", "非法", "捕鱼"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "环绕小岛巡航"},
+        {"action": "detect", "target": "boat", "reason": "检测岛周围的可疑船只或捕鱼工具"},
+        {"action": "report", "target": "anomaly", "reason": "发现非法捕鱼活动立即标记位置"}
+      ],
+      "summary": "环岛巡逻：绕岛巡航检测非法捕鱼活动"
+    }
+  },
+  {
+    "id": "patrol_04",
+    "instruction": "在这一片海域来回巡航，保持警戒",
+    "keywords": ["海域", "巡航", "警戒"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "在指定海域执行往复巡航"},
+        {"action": "detect", "target": "anomaly", "reason": "持续监控海面情况"},
+        {"action": "report", "target": "anomaly", "reason": "发现异常立即报告"}
+      ],
+      "summary": "警戒巡航：在指定海域往复巡逻并持续监控"
+    }
+  },
+  {
+    "id": "patrol_05",
+    "instruction": "去水库巡逻，重点关注进水口附近",
+    "keywords": ["水库", "巡逻", "进水口"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "巡航水库全区域"},
+        {"action": "detect", "target": "anomaly", "reason": "重点在进水口附近加强检测"},
+        {"action": "inspect", "target": "area", "reason": "仔细检查进水口周围区域"},
+        {"action": "report", "target": "anomaly", "reason": "生成巡检记录报告"}
+      ],
+      "summary": "水库重点巡逻：全面巡航，重点检查进水口"
+    }
+  },
+  {
+    "id": "patrol_06",
+    "instruction": "在河湾处巡逻，不要让陌生人靠近水闸",
+    "keywords": ["河湾", "巡逻", "水闸"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "在河湾水闸周边巡逻"},
+        {"action": "detect", "target": "boat", "reason": "监测靠近水闸的船只和人员"},
+        {"action": "report", "target": "anomaly", "reason": "发现可疑接近时立即报告"}
+      ],
+      "summary": "水闸巡逻：警戒河湾水闸周边，监测可疑接近"
+    }
+  },
+  {
+    "id": "patrol_07",
+    "instruction": "从A点巡逻到B点，再返回A点，覆盖中间全部区域",
+    "keywords": ["巡逻", "返回", "覆盖", "区域"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "从A到B执行去程巡逻"},
+        {"action": "detect", "target": "anomaly", "reason": "去程中持续扫描异常"},
+        {"action": "navigate", "target": "area", "reason": "从B返回到A执行回程巡逻"},
+        {"action": "detect", "target": "anomaly", "reason": "回程中继续扫描，确保无遗漏"}
+      ],
+      "summary": "往返巡逻：A-B-A 双向覆盖巡逻"
+    }
+  },
+  {
+    "id": "patrol_08",
+    "instruction": "巡视港口外围一圈，确保没有漂浮障碍物影响航道",
+    "keywords": ["港口", "巡视", "障碍物", "航道"],
+    "category": "patrol",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "前往港口区域"},
+        {"action": "detect", "target": "obstacle", "reason": "检测航道上的漂浮障碍物"},
+        {"action": "report", "target": "obstacle", "reason": "发现障碍物立即报告位置以通知航道清理"}
+      ],
+      "summary": "航道巡检：巡视港口外围，检测并报告障碍物"
+    }
+  },
+  {
+    "id": "transport_01",
+    "instruction": "把补给物资从码头运到3号浮标那边去",
+    "keywords": ["补给", "码头", "运送", "浮标"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "从当前位置前往码头装载物资"},
+        {"action": "navigate", "target": "buoy", "reason": "携带物资前往3号浮标所在位置"},
+        {"action": "navigate", "target": "dock", "reason": "物资送达后返回码头汇报"}
+      ],
+      "summary": "物资运输：从码头取货，送至3号浮标，返回"
+    }
+  },
+  {
+    "id": "transport_02",
+    "instruction": "把这个传感器送到7号位，顺便检查一下那边的设备",
+    "keywords": ["送", "传感器", "检查", "设备"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "携带传感器前往7号位"},
+        {"action": "inspect", "target": "area", "reason": "到达后顺便检查周边设备状态"},
+        {"action": "report", "target": "area", "reason": "汇报设备状态和投送完成情况"}
+      ],
+      "summary": "投送+检查：运送传感器到7号位并检查设备"
+    }
+  },
+  {
+    "id": "transport_03",
+    "instruction": "去对岸把那个工具箱拿过来",
+    "keywords": ["对岸", "工具箱", "拿"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "驶向对岸目标位置"},
+        {"action": "navigate", "target": "area", "reason": "携带工具箱返回出发岸"}
+      ],
+      "summary": "取物任务：前往对岸取回工具箱"
+    }
+  },
+  {
+    "id": "transport_04",
+    "instruction": "给每个浮标送一个维修工具包",
+    "keywords": ["浮标", "送", "工具包"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "依次前往每个浮标位置"},
+        {"action": "report", "target": "buoy", "reason": "确认工具包送达并记录"}
+      ],
+      "summary": "分发任务：依次向所有浮标配送维修工具包"
+    }
+  },
+  {
+    "id": "transport_05",
+    "instruction": "把打捞上来的垃圾拖到回收站",
+    "keywords": ["垃圾", "拖", "回收站"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "拖拽已收集的垃圾前往回收站"},
+        {"action": "report", "target": "trash", "reason": "记录本次回收量并汇报"}
+      ],
+      "summary": "拖运任务：将垃圾拖至回收站并登记"
+    }
+  },
+  {
+    "id": "transport_06",
+    "instruction": "护送这艘工程船安全通过桥洞",
+    "keywords": ["护送", "工程船", "桥洞"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "boat", "reason": "靠近工程船开始护航"},
+        {"action": "detect", "target": "obstacle", "reason": "前方检测航道障碍物"},
+        {"action": "avoid", "target": "obstacle", "reason": "引导工程船避开障碍物安全通过桥洞"},
+        {"action": "report", "target": "boat", "reason": "确认工程船安全通过后报告"}
+      ],
+      "summary": "护航任务：护送工程船安全通过桥洞"
+    }
+  },
+  {
+    "id": "transport_07",
+    "instruction": "把锚地从当前位置移到100米外的位置",
+    "keywords": ["锚", "移动", "位置"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "前往当前锚地位置"},
+        {"action": "navigate", "target": "area", "reason": "将锚拖至100米外的新位置"}
+      ],
+      "summary": "移锚任务：将锚从当前位置移动到新位置"
+    }
+  },
+  {
+    "id": "transport_08",
+    "instruction": "帮我把这箱设备搬上码头",
+    "keywords": ["设备", "搬", "码头"],
+    "category": "transport",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "携带设备箱前往码头"},
+        {"action": "report", "target": "dock", "reason": "确认设备已搬上码头并汇报"}
+      ],
+      "summary": "搬运任务：将设备箱运送至码头并卸载"
+    }
+  },
+  {
+    "id": "rescue_01",
+    "instruction": "去救那个落水的人，在东边约200米处",
+    "keywords": ["救", "落水", "东边"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "全速驶向东边200米处落水点"},
+        {"action": "detect", "target": "anomaly", "reason": "精确定位落水者位置"},
+        {"action": "report", "target": "anomaly", "reason": "发现落水者后立即发送位置给救援队"}
+      ],
+      "summary": "搜救任务：前往东边200米处搜寻落水者"
+    }
+  },
+  {
+    "id": "rescue_02",
+    "instruction": "搜索3号区域，那艘失踪的小渔船可能在那",
+    "keywords": ["搜索", "失踪", "渔船"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "前往3号区域展开搜索"},
+        {"action": "detect", "target": "boat", "reason": "用雷达和视觉搜索失踪渔船"},
+        {"action": "report", "target": "boat", "reason": "发现目标立即报告位置"}
+      ],
+      "summary": "搜索任务：在3号区域搜索失踪渔船"
+    }
+  },
+  {
+    "id": "rescue_03",
+    "instruction": "有人落水了，快去救人！先别管其他的",
+    "keywords": ["落水", "救人", "紧急"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "anomaly", "reason": "紧急扫描定位落水者"},
+        {"action": "navigate", "target": "anomaly", "reason": "全速驶向落水者位置"},
+        {"action": "report", "target": "anomaly", "reason": "抵达后发送位置给急救人员"}
+      ],
+      "summary": "紧急救援：立即定位并前往落水者位置"
+    }
+  },
+  {
+    "id": "rescue_04",
+    "instruction": "打捞沉在水底的那辆落水车",
+    "keywords": ["打捞", "沉", "落水车"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "anomaly", "reason": "前往落水车辆所在位置"},
+        {"action": "detect", "target": "anomaly", "reason": "用声纳确认车辆在水下的精确位置"},
+        {"action": "report", "target": "anomaly", "reason": "标记精确坐标供打捞团队作业"}
+      ],
+      "summary": "打捞定位：前往并精确定位水下沉车位置"
+    }
+  },
+  {
+    "id": "rescue_05",
+    "instruction": "去南码头接伤员回来",
+    "keywords": ["南码头", "伤员", "接"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "全速驶向南码头"},
+        {"action": "navigate", "target": "dock", "reason": "接到伤员后返回基地码头"}
+      ],
+      "summary": "伤员转运：前往南码头接伤员并送回"
+    }
+  },
+  {
+    "id": "rescue_06",
+    "instruction": "发大水了，去那个被淹的村子看看有没有被困的人",
+    "keywords": ["发大水", "被淹", "被困"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "前往被淹村庄区域"},
+        {"action": "detect", "target": "anomaly", "reason": "搜索是否有被困人员"},
+        {"action": "report", "target": "anomaly", "reason": "发现被困人员立即上报位置和数量"}
+      ],
+      "summary": "洪灾救援：前往被淹村庄搜索被困人员"
+    }
+  },
+  {
+    "id": "rescue_07",
+    "instruction": "搜索整条河道，找一个落水的背包",
+    "keywords": ["搜索", "河道", "落水", "背包"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "沿河道逐段搜索"},
+        {"action": "detect", "target": "anomaly", "reason": "持续扫描水面寻找背包"},
+        {"action": "report", "target": "anomaly", "reason": "发现背包后标记位置"}
+      ],
+      "summary": "物品搜索：沿河道搜索落水背包"
+    }
+  },
+  {
+    "id": "rescue_08",
+    "instruction": "协助搁浅的渔船脱困，把它拖回深水区",
+    "keywords": ["搁浅", "拖", "深水区"],
+    "category": "rescue",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "boat", "reason": "前往搁浅渔船位置"},
+        {"action": "navigate", "target": "area", "reason": "拖拽渔船返回深水区安全位置"}
+      ],
+      "summary": "脱困救援：接近并拖拽搁浅渔船回到深水区"
+    }
+  },
+  {
+    "id": "multi_01",
+    "instruction": "去检查1号和2号浮标，顺便把航道上的漂浮垃圾清了",
+    "keywords": ["检查", "浮标", "清理", "垃圾"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "先前往1号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查1号浮标状态"},
+        {"action": "navigate", "target": "buoy", "reason": "前往2号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查2号浮标状态"},
+        {"action": "detect", "target": "trash", "reason": "在返回途中检测航道漂浮垃圾"},
+        {"action": "collect", "target": "trash", "reason": "清理检测到的垃圾"}
+      ],
+      "summary": "巡检+清理：依次检查两个浮标，返回途中清理航道垃圾"
+    }
+  },
+  {
+    "id": "multi_02",
+    "instruction": "巡逻港口，发现异常物体立即上报，然后继续巡逻",
+    "keywords": ["巡逻", "港口", "异常", "上报", "继续"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "开始港口巡逻"},
+        {"action": "detect", "target": "anomaly", "reason": "巡逻中持续检测异常物体"},
+        {"action": "report", "target": "anomaly", "reason": "发现异常立即上报，不中断巡逻"},
+        {"action": "navigate", "target": "area", "reason": "继续巡逻直至覆盖全部区域"}
+      ],
+      "summary": "监视巡逻：巡逻中边检测边报告，不中断任务"
+    }
+  },
+  {
+    "id": "multi_03",
+    "instruction": "先去码头拿到维修工具，再去5号浮标那边修理设备",
+    "keywords": ["码头", "工具", "浮标", "修理"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "dock", "reason": "前往码头取维修工具"},
+        {"action": "navigate", "target": "buoy", "reason": "携带工具前往5号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查并修理5号浮标的设备"},
+        {"action": "report", "target": "buoy", "reason": "修理完成后汇报结果"}
+      ],
+      "summary": "取件+维修：取工具后前往5号浮标进行维修"
+    }
+  },
+  {
+    "id": "multi_04",
+    "instruction": "清理完垃圾后，再在附近巡逻一圈确认没有遗漏",
+    "keywords": ["清理", "垃圾", "巡逻", "遗漏"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "detect", "target": "trash", "reason": "扫描定位垃圾"},
+        {"action": "collect", "target": "trash", "reason": "逐一收集垃圾"},
+        {"action": "navigate", "target": "area", "reason": "清理完成后在附近巡逻复查"},
+        {"action": "detect", "target": "trash", "reason": "确认没有遗漏的垃圾"},
+        {"action": "report", "target": "area", "reason": "确认清理完成并汇报"}
+      ],
+      "summary": "清理+复查：先收集垃圾，再巡逻确认无遗漏"
+    }
+  },
+  {
+    "id": "multi_05",
+    "instruction": "台风要来了，赶紧检查所有浮标是否牢固，然后回港避风",
+    "keywords": ["台风", "检查", "浮标", "回港"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "依次快速检查所有浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "确认每个浮标的锚固状态"},
+        {"action": "navigate", "target": "dock", "reason": "检查完毕后立即返回港口避风"},
+        {"action": "report", "target": "buoy", "reason": "汇报所有浮标状态，标记需要加固的"}
+      ],
+      "summary": "台风前巡检：紧急检查浮标锚固，完成后回港"
+    }
+  },
+  {
+    "id": "multi_06",
+    "instruction": "沿着河道巡逻，把发现的死鱼捞起来，最后到环保站统一处理",
+    "keywords": ["巡逻", "死鱼", "捞", "处理"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "沿河道巡逻"},
+        {"action": "detect", "target": "anomaly", "reason": "发现异常物体（死鱼）"},
+        {"action": "collect", "target": "trash", "reason": "打捞发现的死鱼"},
+        {"action": "navigate", "target": "area", "reason": "将收集物运送到环保站统一处理"}
+      ],
+      "summary": "巡逻+清理+处理：巡逻打捞死鱼并送至环保站"
+    }
+  },
+  {
+    "id": "multi_07",
+    "instruction": "先去A点送工具，再去B点巡检，然后把B点的样品带回码头",
+    "keywords": ["送", "巡检", "样品", "带回"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "前往A点配送工具"},
+        {"action": "navigate", "target": "area", "reason": "从A点前往B点"},
+        {"action": "inspect", "target": "area", "reason": "在B点执行巡检任务"},
+        {"action": "navigate", "target": "dock", "reason": "携带B点样品返回码头"}
+      ],
+      "summary": "多点任务：A点送工具 -> B点巡检取样品 -> 返回码头"
+    }
+  },
+  {
+    "id": "multi_08",
+    "instruction": "去7号浮标那儿修灯，修完再把这附近的垃圾清理一下",
+    "keywords": ["修灯", "浮标", "垃圾", "清理"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "buoy", "reason": "前往7号浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查7号浮标灯并维修"},
+        {"action": "detect", "target": "trash", "reason": "在浮标附近区域检测垃圾"},
+        {"action": "collect", "target": "trash", "reason": "清理周边垃圾"},
+        {"action": "report", "target": "buoy", "reason": "汇报维修完成及清理情况"}
+      ],
+      "summary": "维修+清理：修理7号浮标灯，顺带清理周边垃圾"
+    }
+  },
+  {
+    "id": "multi_09",
+    "instruction": "从基地出发，巡逻A区，然后去B区检查设备，最后回基地",
+    "keywords": ["基地", "巡逻", "检查", "回"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "从基地出发前往A区"},
+        {"action": "detect", "target": "anomaly", "reason": "在A区执行巡逻检测"},
+        {"action": "navigate", "target": "area", "reason": "从A区前往B区"},
+        {"action": "inspect", "target": "area", "reason": "检查B区设备状态"},
+        {"action": "navigate", "target": "dock", "reason": "完成任务后返回基地"}
+      ],
+      "summary": "巡逻+巡检：A区巡逻 -> B区设备检查 -> 返回基地"
+    }
+  },
+  {
+    "id": "multi_10",
+    "instruction": "扫描整个湖面，标记水草密集的地方，然后绕开水草去检查中心岛的浮标",
+    "keywords": ["扫描", "水草", "绕开", "浮标"],
+    "category": "multi_step",
+    "plan": {
+      "tasks": [
+        {"action": "navigate", "target": "area", "reason": "扫描整个湖面"},
+        {"action": "detect", "target": "obstacle", "reason": "标记水草密集区域为障碍物"},
+        {"action": "avoid", "target": "obstacle", "reason": "绕开水草区域规划到中心岛的路径"},
+        {"action": "navigate", "target": "buoy", "reason": "前往中心岛浮标"},
+        {"action": "inspect", "target": "buoy", "reason": "检查中心岛浮标状态"}
+      ],
+      "summary": "扫描+避障+巡检：标记水草、绕行、检查浮标"
+    }
+  }
+]
