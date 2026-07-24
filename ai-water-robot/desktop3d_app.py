@@ -86,6 +86,18 @@ class MainWindow(QMainWindow):
         self.wave_timer = None
         self.wave_time = 0.0
 
+        # 动画系统
+        self.anim_timer = None
+        self.anim_frame = 0
+        self.anim_playing = False
+        self.anim_speed = 1.0
+        self.anim_robot = None
+        self.fov_actor = None
+        self.sensor_actor = None
+
+        # 撤销
+        self._undo_stack = []
+
         # LLM 配置
         self.llm_enabled = False
         self.llm_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -107,6 +119,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction("打开原始数据...", self._open_raw, "Ctrl+Shift+O")
         file_menu.addSeparator()
         file_menu.addAction("导出 JSON...", self._export_json)
+        file_menu.addAction("导出截图...", self._export_screenshot)
+        file_menu.addAction("导出报告...", self._export_report)
         file_menu.addSeparator()
         file_menu.addAction("退出", self.close, "Alt+F4")
 
@@ -138,6 +152,12 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._btn("河道 Demo", self._load_river))
         tb.addSeparator()
         tb.addWidget(self._btn("重新规划", self._replan, primary=True))
+        tb.addSeparator()
+        tb.addWidget(self._btn("播放", self._anim_play))
+        tb.addWidget(self._btn("暂停", self._anim_pause))
+        tb.addWidget(self._btn("停止", self._anim_stop))
+        tb.addSeparator()
+        tb.addWidget(self._btn("撤销", self._undo))
         tb.addWidget(self._btn("清除途经点", self._clear_wp, danger=True))
         tb.addWidget(self._btn("清除障碍物", self._clear_obs, danger=True))
 
@@ -431,11 +451,13 @@ class MainWindow(QMainWindow):
             return
         if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny and 0 <= z < self.grid.nz):
             return
+        self._push_undo()
         if self.ctrl_held:
             self.grid.obstacles[z, y, x] = not self.grid.obstacles[z, y, x]
         elif self.shift_held:
             self.grid.mission_waypoints.append((x, y, z))
         else:
+            self._undo_stack.pop()
             return
         self.plotter.clear()
         self._draw()
@@ -447,18 +469,180 @@ class MainWindow(QMainWindow):
 
     def _clear_wp(self):
         if self.grid:
+            self._push_undo()
             self.grid.mission_waypoints = []
             self.plotter.clear()
             self._draw()
 
     def _clear_obs(self):
         if self.grid:
+            self._push_undo()
             self.grid.obstacles[:] = False
             self.plotter.clear()
             self._draw()
 
     def _reset_view(self):
         self.plotter.reset_camera()
+
+    # ═══════════════════ 动画 ═══════════════════
+
+    def _anim_play(self):
+        if not self.path3d or len(self.path3d) < 2:
+            self.status_bar.showMessage("请先加载数据并规划路径")
+            return
+        self.anim_frame = 0
+        self.anim_playing = True
+        self._show_fov()
+        if self.anim_timer is None:
+            self.anim_timer = QTimer(self)
+            self.anim_timer.timeout.connect(self._anim_tick)
+        self.anim_timer.start(80)
+        self.status_bar.showMessage("路径动画播放中...")
+
+    def _anim_pause(self):
+        self.anim_playing = False
+        if self.anim_timer:
+            self.anim_timer.stop()
+        self.status_bar.showMessage("动画已暂停")
+
+    def _anim_stop(self):
+        self.anim_playing = False
+        if self.anim_timer:
+            self.anim_timer.stop()
+        self.anim_frame = 0
+        if self.anim_robot:
+            self.plotter.remove_actor(self.anim_robot)
+            self.anim_robot = None
+        if self.fov_actor:
+            self.plotter.remove_actor(self.fov_actor)
+            self.fov_actor = None
+        self.status_bar.showMessage("动画已停止")
+
+    def _anim_tick(self):
+        if not self.anim_playing or not self.path3d:
+            return
+        self.anim_frame += 1
+        if self.anim_frame >= len(self.path3d):
+            self.anim_playing = False
+            if self.anim_timer:
+                self.anim_timer.stop()
+            self.status_bar.showMessage("路径动画完成")
+            return
+        p = self.path3d[self.anim_frame]
+        x, y, z = p[0], p[1], -p[2]
+        if self.anim_robot:
+            self.plotter.remove_actor(self.anim_robot)
+        self.anim_robot = self.plotter.add_mesh(
+            self.pv.Sphere(center=(x, y, z), radius=0.4),
+            color="#ff4400", pbr=True, name="robot_anim",
+        )
+        # 更新 FOV
+        self._update_fov(p)
+        # 显示渐显路径
+        if self.anim_frame % 5 == 0:
+            partial = np.array([[q[0], q[1], -q[2]] for q in self.path3d[:self.anim_frame + 1]], dtype=np.float64)
+            if len(partial) >= 2:
+                try:
+                    self.plotter.add_mesh(
+                        self.pv.Spline(partial, n_points=len(partial) * 2).tube(radius=0.10),
+                        color="#ff6600", name="anim_path_trail", pbr=True,
+                    )
+                except Exception:
+                    pass
+
+    def _show_fov(self):
+        """显示传感器视野范围"""
+        if self.fov_actor:
+            self.plotter.remove_actor(self.fov_actor)
+        if self.path3d:
+            p = self.path3d[0]
+            x, y, z = p[0], p[1], -p[2]
+            cone = self.pv.Cone(center=(x, y, z), direction=(1, 0, 0), height=3.0, radius=1.5, resolution=16)
+            self.fov_actor = self.plotter.add_mesh(cone, color="#ffaa00", opacity=0.25, name="fov")
+
+    def _update_fov(self, p):
+        """更新传感器视野位置"""
+        if self.fov_actor:
+            self.plotter.remove_actor(self.fov_actor)
+        x, y, z = p[0], p[1], -p[2]
+        # 根据路径方向确定朝向
+        if self.anim_frame + 1 < len(self.path3d):
+            nxt = self.path3d[self.anim_frame + 1]
+            dx, dy = nxt[0] - p[0], nxt[1] - p[1]
+            mag = (dx * dx + dy * dy) ** 0.5 or 1.0
+            dx, dy = dx / mag, dy / mag
+        else:
+            dx, dy = 1.0, 0.0
+        cone = self.pv.Cone(center=(x, y, z), direction=(dx, dy, 0), height=3.0, radius=1.5, resolution=16)
+        self.fov_actor = self.plotter.add_mesh(cone, color="#ffaa00", opacity=0.25, name="fov")
+
+    # ═══════════════════ 撤销 ═══════════════════
+
+    def _push_undo(self):
+        if self.grid:
+            import copy
+            state = {
+                "waypoints": list(self.grid.mission_waypoints),
+                "obstacles": self.grid.obstacles.copy(),
+            }
+            self._undo_stack.append(state)
+            if len(self._undo_stack) > 20:
+                self._undo_stack.pop(0)
+
+    def _undo(self):
+        if not self._undo_stack or not self.grid:
+            return
+        state = self._undo_stack.pop()
+        self.grid.mission_waypoints = state["waypoints"]
+        self.grid.obstacles = state["obstacles"]
+        self.plotter.clear()
+        self._draw()
+        self._refresh_info()
+        self.status_bar.showMessage("已撤销")
+
+    # ═══════════════════ 导出 ═══════════════════
+
+    def _export_screenshot(self):
+        p, _ = QFileDialog.getSaveFileName(self, "导出截图", "screenshot.png", "PNG (*.png);;JPEG (*.jpg)")
+        if p:
+            self.plotter.screenshot(p)
+            self.status_bar.showMessage(f"截图已保存: {p}")
+
+    def _export_report(self):
+        if not self.grid:
+            return
+        p, _ = QFileDialog.getSaveFileName(self, "导出报告", "report.txt", "文本 (*.txt);;Markdown (*.md)")
+        if not p:
+            return
+        g = self.grid
+        n_obs = int(np.sum(g.obstacles))
+        d, f, dc = (0, 0, 0)
+        if self.path3d:
+            d, f, dc = compute_3d_path_cost(g, self.path3d)
+        lines = [
+            "=== 水域机器人路径规划报告 ===",
+            f"网格: {g.nx} x {g.ny} x {g.nz} @ {g.resolution}m/格",
+            f"障碍物数量: {n_obs}",
+            f"途经点数量: {len(g.mission_waypoints)}",
+            f"起点: {g.mission_start}",
+            f"终点: {g.mission_end or '未设定'}",
+            "",
+            "--- 路径结果 ---",
+            f"总距离: {d:,.0f} m",
+            f"水流代价: {f:,.0f}",
+            f"深度代价: {dc:,.0f}",
+            f"路径点数: {len(self.path3d) if self.path3d else 0}",
+            "",
+            "--- 路径坐标 ---",
+        ]
+        if self.path3d:
+            for i, pt in enumerate(self.path3d):
+                if i % 10 == 0:
+                    lines.append(f"  [{i:3d}] ({pt[0]:2d}, {pt[1]:2d}, {pt[2]:2d})")
+            lines.append(f"  [{len(self.path3d)-1:3d}] {self.path3d[-1]}")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+        self.status_bar.showMessage(f"报告已导出: {p}")
 
     def _refresh_info(self):
         g = self.grid
