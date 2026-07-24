@@ -63,8 +63,8 @@ QPushButton#btnPrimary {{
 QPushButton#btnPrimary:hover {{ background: {C['accent_hover']}; }}
 QPushButton#btnDanger {{ background: {C['danger']}; color: white; border: none; }}
 QPushButton#btnDanger:hover {{ background: #e74c3c; }}
-QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 8px; margin-top: 12px; padding-top: 16px; background: {C['panel']}; }}
-QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {C['text']}; }}
+QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 8px; margin-top: 12px; padding-top: 18px; background: {C['panel']}; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #1a2a3a; font-size: 13px; font-weight: bold; }}
 QTextEdit {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; font-size: 12px; color: {C['text']}; }}
 QLabel {{ color: {C['text']}; }}
 QLineEdit {{ color: {C['text']}; background: white; border: 1px solid {C['border']}; border-radius: 6px; padding: 6px; font-size: 13px; }}
