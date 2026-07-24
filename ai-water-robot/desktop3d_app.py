@@ -227,10 +227,10 @@ class MainWindow(QMainWindow):
         g4 = QGroupBox("操作提示")
         l4 = QVBoxLayout(g4)
         tips = QLabel(
-            "Ctrl + 点击 = 放置/移除障碍物\n"
-            "Shift + 点击 = 添加途经点\n"
-            "左键拖拽 = 旋转 | 右键 = 平移\n"
-            "滚轮 = 缩放"
+            "左键拖拽 = 旋转 | Shift+左键 = 平移\n"
+            "右键点击 = 添加途经点\n"
+            "Ctrl + 右键点击 = 放置/移除障碍物\n"
+            "滚轮 = 缩放 | 中键 = 旋转"
         )
         tips.setStyleSheet("color:#5a6a7a; font-size:12px;")
         l4.addWidget(tips)
@@ -257,27 +257,46 @@ class MainWindow(QMainWindow):
         self.plotter.show_grid(color="#c0c8d0", xlabel="东 X", ylabel="北 Y", zlabel="深 Z")
         self.plotter.add_text("加载数据以开始", position="upper_left", font_size=12, color="#556666")
 
-        self.plotter.enable_point_picking(
-            callback=self._on_pick, show_point=True,
-            show_message="点击场景选取坐标 | Ctrl=障碍物 Shift=途经点", font_size=12,
-        )
-        # 键盘修饰键 — 用 Qt 事件
+        # 键盘修饰键 — 用 Qt 事件（更可靠）
         self.plotter.iren.interactor.AddObserver("KeyPressEvent", self._on_key)
         self.plotter.iren.interactor.AddObserver("KeyReleaseEvent", self._on_key_up)
+        # 使用 track_click_position 获取点击坐标，不干扰正常导航
+        self.plotter.track_click_position(callback=self._on_click, side="right")
 
     def _on_key(self, obj, event):
         key = obj.GetKeySym()
-        if key == "Control_L" or key == "Control_R":
+        if key in ("Control_L", "Control_R"):
             self.ctrl_held = True
-        elif key == "Shift_L" or key == "Shift_R":
+        elif key in ("Shift_L", "Shift_R"):
             self.shift_held = True
 
     def _on_key_up(self, obj, event):
         key = obj.GetKeySym()
-        if key == "Control_L" or key == "Control_R":
+        if key in ("Control_L", "Control_R"):
             self.ctrl_held = False
-        elif key == "Shift_L" or key == "Shift_R":
+        elif key in ("Shift_L", "Shift_R"):
             self.shift_held = False
+
+    def _on_click(self, position):
+        """右键点击: 添加途经点 或 Ctrl+右键: 切换障碍物"""
+        if self.grid is None or position is None:
+            return
+        try:
+            x, y = int(round(float(position[0]))), int(round(float(position[1])))
+        except Exception:
+            return
+        if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny):
+            return
+        # 获取当前视角下的深度层（默认表面 z=0）
+        z = 0
+        self._push_undo()
+        if self.ctrl_held:
+            self.grid.obstacles[z, y, x] = not self.grid.obstacles[z, y, x]
+        else:
+            self.grid.mission_waypoints.append((x, y, z))
+        self.plotter.clear()
+        self._draw()
+        self._refresh_info()
 
     # ═══════════════════ 数据加载 ═══════════════════
 
@@ -438,30 +457,7 @@ class MainWindow(QMainWindow):
         self.plotter.add_mesh(pv.StructuredGrid(xx, yy, zz), color="#3399bb",
                                opacity=0.32, name="wave", show_edges=False, smooth_shading=True)
 
-    # ═══════════════════ 交互 ═══════════════════
-
-    def _on_pick(self, point):
-        if point is None or self.grid is None:
-            return
-        try:
-            pt = point.points[0] if hasattr(point, "points") else point
-            x, y = int(round(float(pt[0]))), int(round(float(pt[1])))
-            z = -int(round(float(pt[2])))
-        except Exception:
-            return
-        if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny and 0 <= z < self.grid.nz):
-            return
-        self._push_undo()
-        if self.ctrl_held:
-            self.grid.obstacles[z, y, x] = not self.grid.obstacles[z, y, x]
-        elif self.shift_held:
-            self.grid.mission_waypoints.append((x, y, z))
-        else:
-            self._undo_stack.pop()
-            return
-        self.plotter.clear()
-        self._draw()
-        self._refresh_info()
+    # ═══════════════════ 交互（见 _on_click 方法）═══════════════════
 
     def _replan(self):
         if self.grid:
