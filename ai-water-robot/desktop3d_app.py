@@ -45,11 +45,11 @@ C = {
 
 QSS = f"""
 QMainWindow {{ background: {C['bg']}; }}
-QMenuBar {{ background: {C['panel']}; border-bottom: 1px solid {C['border']}; padding: 2px 8px; font-size: 13px; }}
-QMenuBar::item:selected {{ background: #e0e8f0; border-radius: 4px; }}
+QMenuBar {{ background: {C['panel']}; border-bottom: 1px solid {C['border']}; padding: 2px 8px; font-size: 13px; color: #000; }}
+QMenuBar::item:selected {{ background: #d0d8e0; border-radius: 4px; }}
 QMenu {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 4px; }}
-QMenu::item {{ padding: 6px 28px; border-radius: 4px; }}
-QMenu::item:selected {{ background: #dce8f4; }}
+QMenu::item {{ padding: 6px 28px; border-radius: 4px; color: #000; font-size: 13px; }}
+QMenu::item:selected {{ background: #d0d8e0; }}
 QToolBar {{ background: {C['panel']}; border-bottom: 1px solid {C['border']}; spacing: 6px; padding: 4px 8px; }}
 QPushButton {{
     background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px;
@@ -63,8 +63,8 @@ QPushButton#btnPrimary {{
 QPushButton#btnPrimary:hover {{ background: {C['accent_hover']}; }}
 QPushButton#btnDanger {{ background: {C['danger']}; color: white; border: none; }}
 QPushButton#btnDanger:hover {{ background: #e74c3c; }}
-QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 8px; margin-top: 12px; padding-top: 18px; background: {C['panel']}; }}
-QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #1a2a3a; font-size: 13px; font-weight: bold; }}
+QGroupBox {{ font-weight: bold; border: 2px solid #b0b8c0; border-radius: 8px; margin-top: 14px; padding-top: 20px; background: {C['panel']}; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 14px; padding: 2px 8px; color: #000; font-size: 14px; font-weight: bold; }}
 QTextEdit {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; font-size: 12px; color: {C['text']}; }}
 QLabel {{ color: #111; font-size: 13px; }}
 QLineEdit {{ color: #111; background: white; border: 1px solid #aab5c0; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-weight: bold; }}
@@ -585,6 +585,7 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")  # 绕过 Windows 原生风格，让 QSS 生效
     app.setStyleSheet(QSS)
     app.setFont(QFont("Microsoft YaHei", 10))
     win = MainWindow()
