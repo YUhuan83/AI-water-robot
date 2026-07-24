@@ -95,7 +95,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._setup_3d()
-        self._load_coastal()
+        self._init_empty()
 
     # ═══════════════════ UI ═══════════════════
 
@@ -307,6 +307,17 @@ class MainWindow(QMainWindow):
             self.grid.to_json(p)
             self.status_bar.showMessage(f"已导出: {p}")
 
+    def _init_empty(self):
+        """初始空场景"""
+        from environment.water_3d import Water3DGrid
+        g = Water3DGrid(30, 30, 8, resolution=50)
+        g.set_uniform_bathymetry(15.0)
+        g.dock_pos = None
+        g.mission_start = None
+        g.mission_waypoints = []
+        g.mission_end = None
+        self.load(g)
+
     def _load_coastal(self):
         self.load(demo_3d_coastal())
     def _load_river(self):
@@ -455,9 +466,9 @@ class MainWindow(QMainWindow):
             return
         n_obs = int(np.sum(g.obstacles))
         self.lbl_info.setPlainText(
-            f"网格: {g.nx} × {g.ny} × {g.nz}\n"
+            f"网格: {g.nx} x {g.ny} x {g.nz}\n"
             f"精度: {g.resolution:.0f} m/格\n"
-            f"障碍物: {n_obs}  途经点: {len(g.mission_waypoints)}\n"
+            f"障碍物: {n_obs}  途经点: {len(g.mission_waypoints or [])}\n"
             f"起点: {g.mission_start or '未设定'}"
         )
 
