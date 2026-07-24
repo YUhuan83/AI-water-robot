@@ -1,157 +1,291 @@
 """
-水域机器人 3D 智能决策平台
-
-功能: 导入水况数据 → 动态海浪模拟 → 自主路径规划 → 3D 交互式可视化
-操作: 鼠标拖拽旋转/缩放 | Ctrl+点击切换障碍物 | Shift+点击添加途经点
+水域机器人 3D 智能决策平台 — PySide6 + PyVista
 """
 
-import os
-import sys
-import math
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+import os, sys, math, json
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QFileDialog, QDockWidget, QToolBar,
+    QStatusBar, QMenuBar, QMenu, QMessageBox, QFrame,
+    QGroupBox, QGridLayout, QSizePolicy, QSplitter, QTextEdit,
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon
+
+from pyvistaqt import QtInteractor
+import pyvista as pv
+
 from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river
 from planning.astar3d import plan_tsp_3d, compute_3d_path_cost
 from data.water_adapter import load_water_data
-from config import OUTPUT_DIR
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# ── 配色 ──
+C = {
+    "bg":          "#f5f6f8",
+    "panel":       "#ffffff",
+    "border":      "#d8dce0",
+    "text":        "#2c3e50",
+    "text_sec":    "#7f8c8d",
+    "accent":      "#2980b9",
+    "accent_hover":"#3498db",
+    "danger":      "#c0392b",
+    "success":     "#27ae60",
+    "warning":     "#e67e22",
+    "path":        "#e8590c",
+    "start":       "#2ecc71",
+    "wp":          "#f39c12",
+    "end":         "#e74c3c",
+}
 
-# ── 亮色主题配色 ──
-BG_VIEW = "#dce8f0"        # 3D 视图背景
-BG_UI = "#eef3f6"          # 面板背景
-FG_TEXT = "#2a4050"        # 文字色
-FG_TITLE = "#1a3040"       # 标题色
-WATER_COLOR = "#3388bb"    # 水面
-WATER_ALPHA = 0.35
-SEABED_COLOR = "#889966"   # 海底
-OBS_COLOR = "#d04040"      # 障碍物
-PATH_COLOR = "#ff6600"     # 路径
-START_COLOR = "#22aa55"    # 起点
-WP_COLOR = "#ee8822"       # 途经点
-END_COLOR = "#dd3333"      # 终点
-CURRENT_COLOR = "#2288cc"  # 水流箭头
+QSS = f"""
+QMainWindow {{ background: {C['bg']}; }}
+QMenuBar {{ background: {C['panel']}; border-bottom: 1px solid {C['border']}; padding: 2px 8px; font-size: 13px; }}
+QMenuBar::item:selected {{ background: #e0e8f0; border-radius: 4px; }}
+QMenu {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 4px; }}
+QMenu::item {{ padding: 6px 28px; border-radius: 4px; }}
+QMenu::item:selected {{ background: #dce8f4; }}
+QToolBar {{ background: {C['panel']}; border-bottom: 1px solid {C['border']}; spacing: 6px; padding: 4px 8px; }}
+QPushButton {{
+    background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px;
+    padding: 8px 16px; font-size: 13px; color: {C['text']};
+}}
+QPushButton:hover {{ background: #e8f0f8; border-color: {C['accent']}; }}
+QPushButton:pressed {{ background: #d0dce8; }}
+QPushButton#btnPrimary {{
+    background: {C['accent']}; color: white; border: none; font-weight: bold;
+}}
+QPushButton#btnPrimary:hover {{ background: {C['accent_hover']}; }}
+QPushButton#btnDanger {{ background: {C['danger']}; color: white; border: none; }}
+QPushButton#btnDanger:hover {{ background: #e74c3c; }}
+QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 8px; margin-top: 12px; padding-top: 16px; background: {C['panel']}; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {C['text']}; }}
+QTextEdit {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; font-size: 12px; color: {C['text']}; }}
+QLabel {{ color: {C['text']}; }}
+QStatusBar {{ background: {C['panel']}; border-top: 1px solid {C['border']}; font-size: 12px; }}
+QDockWidget {{ font-size: 13px; color: {C['text']}; }}
+"""
 
-FONT_UI = ("Microsoft YaHei", 9)
-FONT_BOLD = ("Microsoft YaHei", 9, "bold")
-FONT_MONO = ("Consolas", 10)
 
-
-# ═══════════════════════════════════════════════════════════
-# 3D 场景
-# ═══════════════════════════════════════════════════════════
-
-class Scene3D:
-    def __init__(self, panel):
-        import pyvista as pv
-        self.pv = pv
-        self.panel = panel
-        self.grid = None
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("水域机器人 3D 智能决策平台")
+        self.resize(1280, 800)
+        self.grid: Water3DGrid = None
         self.path3d = None
         self.path_actor = None
-        self.wave_mesh = None
+        self.ctrl_held = False
+        self.shift_held = False
+        self.wave_timer = None
         self.wave_time = 0.0
-        self.wave_running = False
-        self.nx = self.ny = 20
 
-        self.plotter = pv.Plotter(window_size=(820, 640))
-        self.plotter.set_background(BG_VIEW)
-        self.plotter.add_axes(color="#889999", xlabel="东 X", ylabel="北 Y", zlabel="深 Z")
+        self._build_ui()
+        self._setup_3d()
+        self._load_coastal()
 
-        self.plotter.add_text(
-            "导入水况数据或选择演示场景以开始\n数据加载后将自动生成动态海浪并规划路径",
-            position="upper_left", font_size=12, color="#556666",
+    # ═══════════════════ UI ═══════════════════
+
+    def _build_ui(self):
+        # 菜单栏
+        mb = self.menuBar()
+        file_menu = mb.addMenu("文件(&F)")
+        file_menu.addAction("打开 JSON...", self._open_json, "Ctrl+O")
+        file_menu.addAction("打开原始数据...", self._open_raw, "Ctrl+Shift+O")
+        file_menu.addSeparator()
+        file_menu.addAction("导出 JSON...", self._export_json)
+        file_menu.addSeparator()
+        file_menu.addAction("退出", self.close, "Alt+F4")
+
+        demo_menu = mb.addMenu("演示(&D)")
+        demo_menu.addAction("沿海水域", self._load_coastal)
+        demo_menu.addAction("内河航道", self._load_river)
+
+        view_menu = mb.addMenu("视图(&V)")
+        view_menu.addAction("重置视角", self._reset_view, "R")
+        view_menu.addAction("俯视图", lambda: self.plotter.view_xy())
+        view_menu.addAction("前视图", lambda: self.plotter.view_xz())
+        view_menu.addAction("侧视图", lambda: self.plotter.view_yz())
+
+        # 工具栏
+        tb = QToolBar("主工具栏")
+        tb.setMovable(False)
+        self.addToolBar(tb)
+        tb.addWidget(self._btn("打开 JSON", self._open_json))
+        tb.addWidget(self._btn("打开原始数据", self._open_raw))
+        tb.addSeparator()
+        tb.addWidget(self._btn("沿海 Demo", self._load_coastal))
+        tb.addWidget(self._btn("河道 Demo", self._load_river))
+        tb.addSeparator()
+        tb.addWidget(self._btn("重新规划", self._replan, primary=True))
+        tb.addWidget(self._btn("清除途经点", self._clear_wp, danger=True))
+        tb.addWidget(self._btn("清除障碍物", self._clear_obs, danger=True))
+
+        # 状态栏
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("就绪 — 使用 Ctrl+点击放置障碍物, Shift+点击添加途经点")
+
+        # 右侧面板
+        dock = QDockWidget("控制面板", self)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        dock.setFixedWidth(280)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        dock.setWidget(self._build_panel())
+
+    def _build_panel(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        # 信息
+        g1 = QGroupBox("场景信息")
+        l1 = QVBoxLayout(g1)
+        self.lbl_info = QTextEdit()
+        self.lbl_info.setReadOnly(True)
+        self.lbl_info.setMaximumHeight(100)
+        self.lbl_info.setPlainText("未加载数据")
+        l1.addWidget(self.lbl_info)
+        lay.addWidget(g1)
+
+        # 结果
+        g2 = QGroupBox("路径规划结果")
+        l2 = QGridLayout(g2)
+        self.lbl_dist = QLabel("总距离: --"); self.lbl_dist.setStyleSheet("font-size:16px;font-weight:bold;color:#e8590c")
+        self.lbl_flow = QLabel("水流代价: --"); self.lbl_flow.setStyleSheet("font-size:14px;color:#2980b9")
+        self.lbl_depth = QLabel("深度代价: --"); self.lbl_depth.setStyleSheet("font-size:14px;color:#27ae60")
+        l2.addWidget(self.lbl_dist, 0, 0)
+        l2.addWidget(self.lbl_flow, 1, 0)
+        l2.addWidget(self.lbl_depth, 2, 0)
+        lay.addWidget(g2)
+
+        # 操作提示
+        g3 = QGroupBox("操作提示")
+        l3 = QVBoxLayout(g3)
+        tips = QLabel(
+            "Ctrl + 点击 = 放置/移除障碍物\n"
+            "Shift + 点击 = 添加途经点\n"
+            "左键拖拽 = 旋转 | 右键 = 平移\n"
+            "滚轮 = 缩放 | 中键 = 旋转"
         )
-        self._grid_ref()
-        self._init_empty_wave()
+        tips.setStyleSheet("color:#7f8c8d; font-size:12px;")
+        l3.addWidget(tips)
+        lay.addWidget(g3)
 
-        # 点击选取
+        lay.addStretch()
+        return w
+
+    def _btn(self, text, callback, primary=False, danger=False):
+        b = QPushButton(text)
+        b.clicked.connect(callback)
+        if primary:
+            b.setObjectName("btnPrimary")
+        elif danger:
+            b.setObjectName("btnDanger")
+        return b
+
+    # ═══════════════════ 3D 场景 ═══════════════════
+
+    def _setup_3d(self):
+        self.plotter = QtInteractor(self)
+        self.setCentralWidget(self.plotter)
+        self.plotter.set_background("#dce8f0")
+        self.plotter.show_grid(color="#c0c8d0", xlabel="东 X", ylabel="北 Y", zlabel="深 Z")
+        self.plotter.add_text("加载数据以开始", position="upper_left", font_size=12, color="#556666")
+
         self.plotter.enable_point_picking(
             callback=self._on_pick, show_point=True,
-            show_message="点击 3D 场景选取坐标 | Ctrl=障碍物  Shift=途经点",
-            font_size=11,
+            show_message="点击场景选取坐标 | Ctrl=障碍物 Shift=途经点", font_size=12,
         )
+        # 键盘修饰键 — 用 Qt 事件
+        self.plotter.iren.interactor.AddObserver("KeyPressEvent", self._on_key)
+        self.plotter.iren.interactor.AddObserver("KeyReleaseEvent", self._on_key_up)
 
-    def _grid_ref(self):
-        g = self.pv.ImageData(dimensions=(3, 3, 1), spacing=(25, 25, 1))
-        self.plotter.add_mesh(g, color="#c8d8e0", opacity=0.3, name="grid")
+    def _on_key(self, obj, event):
+        key = obj.GetKeySym()
+        if key == "Control_L" or key == "Control_R":
+            self.ctrl_held = True
+        elif key == "Shift_L" or key == "Shift_R":
+            self.shift_held = True
 
-    def _init_empty_wave(self):
-        """初始化一个平坦的水面网格（后续加载数据后替换为动态波浪）"""
-        xx, yy = np.meshgrid(np.linspace(0, self.nx, 40), np.linspace(0, self.ny, 40))
-        zz = np.zeros_like(xx)
-        grid = self.pv.StructuredGrid(xx, yy, zz)
-        self.wave_mesh = self.plotter.add_mesh(
-            grid, color=WATER_COLOR, opacity=WATER_ALPHA,
-            name="wave", show_edges=False, smooth_shading=True,
-        )
+    def _on_key_up(self, obj, event):
+        key = obj.GetKeySym()
+        if key == "Control_L" or key == "Control_R":
+            self.ctrl_held = False
+        elif key == "Shift_L" or key == "Shift_R":
+            self.shift_held = False
+
+    # ═══════════════════ 数据加载 ═══════════════════
 
     def load(self, grid):
         self.grid = grid
-        self.nx, self.ny = grid.nx, grid.ny
         self.path3d = None
         self.wave_time = 0.0
         self.plotter.clear()
         self._draw()
         self._start_waves()
         self.plotter.reset_camera()
-        self.panel.refresh()
+        self._refresh_info()
 
-    def _start_waves(self):
-        """启动波浪动画"""
-        if self.wave_running:
-            return
-        self.wave_running = True
-        self._animate_wave()
+    def _open_json(self):
+        p, _ = QFileDialog.getOpenFileName(self, "打开 JSON 文件", "", "JSON (*.json);;所有文件 (*)")
+        if p:
+            try:
+                self.load(Water3DGrid.from_json(p))
+                self.status_bar.showMessage(f"已加载: {os.path.basename(p)}")
+            except Exception as e:
+                QMessageBox.critical(self, "加载失败", str(e))
 
-    def _animate_wave(self):
-        """每 80ms 更新一次波浪"""
-        if not self.wave_running or self.grid is None:
-            return
-        self.wave_time += 0.08
-        self._update_wave_surface()
-        # 通过 Tkinter after 调度下次更新
-        if self.panel.root:
-            self.panel.root.after(80, self._animate_wave)
-
-    def _update_wave_surface(self):
-        """更新水面网格顶点以模拟波浪"""
-        if self.grid is None:
-            return
-        res = max(2, min(self.nx, self.ny) // 2)
-        xx, yy = np.meshgrid(
-            np.linspace(0, self.nx, res * 2),
-            np.linspace(0, self.ny, res * 2),
+    def _open_raw(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "打开原始数据", "",
+            "所有支持格式 (*.csv *.xyz *.txt *.json);;CSV (*.csv);;XYZ (*.xyz);;文本 (*.txt);;所有文件 (*)",
         )
-        t = self.wave_time
-        zz = (0.12 * np.sin(xx * 0.6 + t * 2.5) * np.cos(yy * 0.5 + t * 1.8)
-              + 0.08 * np.sin(xx * 0.3 - t * 1.3) * np.sin(yy * 0.7 + t * 2.1)
-              + 0.05 * np.cos((xx + yy) * 0.4 + t * 3.0))
-        grid = self.pv.StructuredGrid(xx, yy, zz)
-        self.plotter.add_mesh(
-            grid, color=WATER_COLOR, opacity=WATER_ALPHA,
-            name="wave", show_edges=False, smooth_shading=True,
-        )
+        if not p:
+            return
+        try:
+            cur_path = None
+            d = os.path.dirname(p)
+            for c in ["currents.txt", "currents.csv", "flow.txt"]:
+                cp = os.path.join(d, c)
+                if os.path.exists(cp):
+                    cur_path = cp; break
+            self.load(load_water_data(p, currents_path=cur_path, resolution=100, nz=10))
+            self.status_bar.showMessage(f"已加载: {os.path.basename(p)}")
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", f"{e}")
+
+    def _export_json(self):
+        if not self.grid:
+            return
+        p, _ = QFileDialog.getSaveFileName(self, "导出 JSON", "water_data.json", "JSON (*.json)")
+        if p:
+            self.grid.to_json(p)
+            self.status_bar.showMessage(f"已导出: {p}")
+
+    def _load_coastal(self):
+        self.load(demo_3d_coastal())
+    def _load_river(self):
+        self.load(demo_3d_river())
+
+    # ═══════════════════ 渲染 ═══════════════════
 
     def _draw(self):
         g = self.grid
         nx, ny, nz = g.nx, g.ny, g.nz
 
-        # 海底地形
+        # 海底
         dv = np.full((ny, nx), np.nan, dtype=np.float32)
         for y in range(ny):
             for x in range(nx):
                 if g.depth[y, x] > 0:
                     dv[y, x] = -(g.depth[y, x] / max(1, g.depth.max())) * nz * 0.8
-        xx, yy = np.meshgrid(range(nx), range(ny))
-        self.plotter.add_mesh(
-            self.pv.StructuredGrid(xx, yy, dv),
-            color=SEABED_COLOR, opacity=0.5, name="seabed", show_edges=False,
-        )
+        gx, gy = np.meshgrid(range(nx), range(ny))
+        self.plotter.add_mesh(pv.StructuredGrid(gx, gy, dv), color="#889966", opacity=0.45, name="seabed", show_edges=False)
 
         # 障碍物
         for z in range(nz):
@@ -159,68 +293,81 @@ class Scene3D:
                 for x in range(nx):
                     if g.obstacles[z, y, x]:
                         self.plotter.add_mesh(
-                            self.pv.Cube(center=(x, y, -z - 0.5),
-                                          x_length=0.85, y_length=0.85, z_length=0.85),
-                            color=OBS_COLOR, opacity=0.9, name=f"obs{x}.{y}.{z}",
+                            pv.Cube(center=(x, y, -z - 0.5), x_length=0.85, y_length=0.85, z_length=0.85),
+                            color=C["danger"], opacity=0.88, name=f"o.{x}.{y}.{z}",
                         )
 
-        # 水流箭头
+        # 水流
         step = max(1, min(nx, ny) // 10)
         for y in range(0, ny, step):
             for x in range(0, nx, step):
                 if g.depth[y, x] <= 0:
                     continue
-                (dx, dy, _), spd = g.get_current_at(x, y, 0)
-                if spd > 0.01:
-                    a = self.pv.Arrow(
-                        start=(x, y, 0.3), direction=(dx * spd * 3, dy * spd * 3, 0),
-                        tip_length=0.25, tip_radius=0.08, shaft_radius=0.03, scale=1.0,
+                (dx, dy, _), sp = g.get_current_at(x, y, 0)
+                if sp > 0.01:
+                    self.plotter.add_mesh(
+                        pv.Arrow(start=(x, y, 0.3), direction=(dx * sp * 3, dy * sp * 3, 0),
+                                  tip_length=0.25, tip_radius=0.08, shaft_radius=0.03),
+                        color=C["accent"], opacity=0.5,
                     )
-                    self.plotter.add_mesh(a, color=CURRENT_COLOR, opacity=0.55)
 
-        # 起点
+        # 任务点
         if g.mission_start:
             s = g.mission_start
-            b = self.pv.Sphere(center=(s[0], s[1], -s[2]), radius=0.5)
-            self.plotter.add_mesh(b, color=START_COLOR, pbr=True, name="start")
-            self.plotter.add_point_labels(
-                [b.center], ["起点"], font_size=11, text_color=START_COLOR, point_size=1,
-            )
-
-        # 途经点
-        for i, wp in enumerate(g.mission_waypoints):
-            b = self.pv.Sphere(center=(wp[0], wp[1], -wp[2]), radius=0.3)
-            self.plotter.add_mesh(b, color=WP_COLOR, name=f"wp{i}")
-
-        # 终点
+            bs = pv.Sphere(center=(s[0], s[1], -s[2]), radius=0.55)
+            self.plotter.add_mesh(bs, color=C["start"], pbr=True, name="start")
+            self.plotter.add_point_labels([bs.center], ["起点"], font_size=13, text_color=C["start"], point_size=1)
+        for wp in g.mission_waypoints:
+            bw = pv.Sphere(center=(wp[0], wp[1], -wp[2]), radius=0.35)
+            self.plotter.add_mesh(bw, color=C["wp"], name=f"wp.{wp}")
         if g.mission_end and g.mission_end != g.mission_start:
             e = g.mission_end
-            b = self.pv.Sphere(center=(e[0], e[1], -e[2]), radius=0.45)
-            self.plotter.add_mesh(b, color=END_COLOR, pbr=True, name="end")
+            be = pv.Sphere(center=(e[0], e[1], -e[2]), radius=0.5)
+            self.plotter.add_mesh(be, color=C["end"], pbr=True, name="end")
 
-        # 自主规划
+        # 路径
         if g.mission_start and g.mission_waypoints:
             self._plan()
 
     def _plan(self):
-        if not self.grid or not self.grid.mission_start or not self.grid.mission_waypoints:
+        g = self.grid
+        if not (g and g.mission_start and g.mission_waypoints):
             return
-        self.path3d = plan_tsp_3d(
-            self.grid, self.grid.mission_start,
-            self.grid.mission_waypoints, self.grid.mission_end,
-        )
+        self.path3d = plan_tsp_3d(g, g.mission_start, g.mission_waypoints, g.mission_end)
         if self.path3d is None:
             return
         if self.path_actor:
             self.plotter.remove_actor(self.path_actor)
         pts = np.array([[p[0], p[1], -p[2]] for p in self.path3d], dtype=np.float64)
         if len(pts) >= 2:
-            tube = self.pv.Spline(pts, n_points=len(pts) * 3).tube(radius=0.12)
-            self.path_actor = self.plotter.add_mesh(
-                tube, color=PATH_COLOR, pbr=True, metallic=0.1, name="path",
-            )
-        d, f, dc = compute_3d_path_cost(self.grid, self.path3d)
-        self.panel.show_result(d, f, dc)
+            tube = pv.Spline(pts, n_points=len(pts) * 3).tube(radius=0.12)
+            self.path_actor = self.plotter.add_mesh(tube, color=C["path"], pbr=True, metallic=0.1, name="path")
+        d, f, dc = compute_3d_path_cost(g, self.path3d)
+        self.lbl_dist.setText(f"总距离: {d:,.0f} m")
+        self.lbl_flow.setText(f"水流代价: {f:,.0f}")
+        self.lbl_depth.setText(f"深度代价: {dc:,.0f}")
+
+    def _start_waves(self):
+        if self.wave_timer is not None:
+            return
+        self.wave_timer = QTimer(self)
+        self.wave_timer.timeout.connect(self._animate_wave)
+        self.wave_timer.start(80)
+
+    def _animate_wave(self):
+        if self.grid is None:
+            return
+        self.wave_time += 0.08
+        r = max(2, min(self.grid.nx, self.grid.ny) // 2)
+        xx, yy = np.meshgrid(np.linspace(0, self.grid.nx, r * 2), np.linspace(0, self.grid.ny, r * 2))
+        t = self.wave_time
+        zz = (0.12 * np.sin(xx * 0.6 + t * 2.5) * np.cos(yy * 0.5 + t * 1.8)
+              + 0.08 * np.sin(xx * 0.3 - t * 1.3) * np.sin(yy * 0.7 + t * 2.1)
+              + 0.05 * np.cos((xx + yy) * 0.4 + t * 3.0))
+        self.plotter.add_mesh(pv.StructuredGrid(xx, yy, zz), color="#3399bb",
+                               opacity=0.32, name="wave", show_edges=False, smooth_shading=True)
+
+    # ═══════════════════ 交互 ═══════════════════
 
     def _on_pick(self, point):
         if point is None or self.grid is None:
@@ -229,218 +376,61 @@ class Scene3D:
             pt = point.points[0] if hasattr(point, "points") else point
             x, y = int(round(float(pt[0]))), int(round(float(pt[1])))
             z = -int(round(float(pt[2])))
-        except (TypeError, IndexError, ValueError):
+        except Exception:
             return
         if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny and 0 <= z < self.grid.nz):
             return
-
-        if self.panel.ctrl.get():
+        if self.ctrl_held:
             self.grid.obstacles[z, y, x] = not self.grid.obstacles[z, y, x]
-        elif self.panel.shift.get():
+        elif self.shift_held:
             self.grid.mission_waypoints.append((x, y, z))
         else:
             return
-
         self.plotter.clear()
         self._draw()
-        self.panel.refresh()
+        self._refresh_info()
 
-    def show(self):
-        self.plotter.show()
-
-    def stop_waves(self):
-        self.wave_running = False
-
-
-# ═══════════════════════════════════════════════════════════
-# 控制面板
-# ═══════════════════════════════════════════════════════════
-
-class Panel:
-    def __init__(self, root):
-        self.root = root
-        self.viewer = None
-        self.ctrl = tk.BooleanVar(value=False)
-        self.shift = tk.BooleanVar(value=False)
-
-        style = ttk.Style()
-        style.configure("TFrame", background=BG_UI)
-        style.configure("TLabelframe", background=BG_UI, foreground=FG_TITLE)
-        style.configure("TLabelframe.Label", background=BG_UI, foreground=FG_TITLE, font=FONT_BOLD)
-        style.configure("TLabel", background=BG_UI, foreground=FG_TEXT, font=FONT_UI)
-        style.configure("TButton", font=FONT_UI)
-
-        f = ttk.Frame(root, padding=8)
-        f.pack(fill=tk.Y, side=tk.RIGHT, padx=2, pady=2)
-        w = 22
-
-        # 数据
-        g1 = ttk.LabelFrame(f, text="数据加载", padding=6)
-        g1.pack(fill=tk.X, pady=3)
-        ttk.Button(g1, text="打开 JSON 文件...", width=w, command=self._load_json).pack(fill=tk.X, pady=2)
-        ttk.Button(g1, text="打开原始数据 (CSV/XYZ/TXT)...", width=w,
-                   command=self._load_raw).pack(fill=tk.X, pady=1)
-        ttk.Separator(g1, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=3)
-        ttk.Button(g1, text="演示: 沿海水域", width=w, command=self._load_coastal).pack(fill=tk.X, pady=1)
-        ttk.Button(g1, text="演示: 内河航道", width=w, command=self._load_river).pack(fill=tk.X, pady=1)
-
-        # 信息
-        g2 = ttk.LabelFrame(f, text="场景信息", padding=6)
-        g2.pack(fill=tk.X, pady=3)
-        self.txt_info = tk.Text(g2, height=4, width=w, bg="#ffffff", fg=FG_TEXT,
-                                 font=FONT_MONO, relief=tk.FLAT, borderwidth=1,
-                                 wrap=tk.WORD, state=tk.DISABLED)
-        self.txt_info.pack(fill=tk.X)
-
-        # 结果
-        g3 = ttk.LabelFrame(f, text="路径规划结果", padding=6)
-        g3.pack(fill=tk.X, pady=3)
-        self.lbl_d = ttk.Label(g3, text="总距离: --", font=FONT_MONO, foreground="#cc5500")
-        self.lbl_d.pack(anchor=tk.W)
-        self.lbl_f = ttk.Label(g3, text="水流代价: --", font=FONT_MONO, foreground="#3377aa")
-        self.lbl_f.pack(anchor=tk.W)
-        self.lbl_z = ttk.Label(g3, text="深度代价: --", font=FONT_MONO, foreground="#558844")
-        self.lbl_z.pack(anchor=tk.W)
-
-        # 操作
-        g4 = ttk.LabelFrame(f, text="操作", padding=6)
-        g4.pack(fill=tk.X, pady=3)
-        ttk.Button(g4, text="重新规划路径", width=w, command=self._replan).pack(fill=tk.X, pady=2)
-        ttk.Button(g4, text="清除途经点", width=w, command=self._clear_wp).pack(fill=tk.X, pady=1)
-        ttk.Button(g4, text="清除障碍物", width=w, command=self._clear_obs).pack(fill=tk.X, pady=1)
-
-        # 提示
-        g5 = ttk.LabelFrame(f, text="操作提示", padding=6)
-        g5.pack(fill=tk.X, pady=3)
-        ttk.Label(g5, text="Ctrl + 点击 = 放置/移除障碍物\nShift + 点击 = 添加途经点\n左键拖拽 = 旋转 | 右键拖拽 = 平移\n滚轮 = 缩放",
-                  font=("Microsoft YaHei", 7), foreground="#778888").pack(anchor=tk.W)
-
-    def _load_json(self):
-        p = filedialog.askopenfilename(
-            title="选择水况数据 JSON 文件",
-            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
-        )
-        if p:
-            try:
-                self.viewer.load(Water3DGrid.from_json(p))
-            except Exception as e:
-                messagebox.showerror("加载失败", str(e))
-
-    def _load_raw(self):
-        """加载原始数据 (CSV/XYZ/TXT 等)，自动检测格式"""
-        p = filedialog.askopenfilename(
-            title="选择原始水深数据文件",
-            filetypes=[
-                ("所有支持的格式", "*.csv;*.xyz;*.txt;*.json"),
-                ("CSV 文件", "*.csv"),
-                ("XYZ 点云", "*.xyz"),
-                ("文本矩阵", "*.txt"),
-                ("所有文件", "*.*"),
-            ],
-        )
-        if not p:
-            return
-        try:
-            # 尝试找到同目录下的水流文件
-            cur_path = None
-            base_dir = os.path.dirname(p)
-            for cand in ["currents.txt", "currents.csv", "flow.txt"]:
-                test_path = os.path.join(base_dir, cand)
-                if os.path.exists(test_path):
-                    cur_path = test_path
-                    break
-            grid = load_water_data(p, currents_path=cur_path, resolution=100, nz=10)
-            self.viewer.load(grid)
-            msg = f"已加载: {os.path.basename(p)}"
-            if cur_path:
-                msg += f" + {os.path.basename(cur_path)}"
-            self.lbl_d.config(text=msg)
-        except Exception as e:
-            messagebox.showerror("加载失败", f"无法解析文件:\n{e}\n\n支持的格式: CSV, XYZ, 纯文本矩阵, JSON")
-
-    def _load_coastal(self):
-        self.viewer.load(demo_3d_coastal())
-    def _load_river(self):
-        self.viewer.load(demo_3d_river())
-    def _clear_wp(self):
-        if self.viewer.grid:
-            self.viewer.grid.mission_waypoints = []
-            self.viewer.plotter.clear()
-            self.viewer._draw()
-    def _clear_obs(self):
-        if self.viewer.grid:
-            self.viewer.grid.obstacles[:] = False
-            self.viewer.plotter.clear()
-            self.viewer._draw()
     def _replan(self):
-        if self.viewer.grid:
-            self.viewer._plan()
+        if self.grid:
+            self._plan()
 
-    def refresh(self):
-        g = self.viewer.grid
+    def _clear_wp(self):
+        if self.grid:
+            self.grid.mission_waypoints = []
+            self.plotter.clear()
+            self._draw()
+
+    def _clear_obs(self):
+        if self.grid:
+            self.grid.obstacles[:] = False
+            self.plotter.clear()
+            self._draw()
+
+    def _reset_view(self):
+        self.plotter.reset_camera()
+
+    def _refresh_info(self):
+        g = self.grid
         if g is None:
             return
         n_obs = int(np.sum(g.obstacles))
-        t = (
-            f"网格: {g.nx} x {g.ny} x {g.nz}\n"
+        self.lbl_info.setPlainText(
+            f"网格: {g.nx} × {g.ny} × {g.nz}\n"
             f"精度: {g.resolution:.0f} m/格\n"
             f"障碍物: {n_obs}  途经点: {len(g.mission_waypoints)}\n"
             f"起点: {g.mission_start or '未设定'}"
         )
-        self.txt_info.config(state=tk.NORMAL)
-        self.txt_info.delete("1.0", tk.END)
-        self.txt_info.insert("1.0", t)
-        self.txt_info.config(state=tk.DISABLED)
 
-    def show_result(self, d, f, dc):
-        self.lbl_d.config(text=f"总距离: {d:,.0f} m")
-        self.lbl_f.config(text=f"水流代价: {f:,.0f}")
-        self.lbl_z.config(text=f"深度代价: {dc:,.0f}")
-
-
-# ═══════════════════════════════════════════════════════════
-# 主程序
-# ═══════════════════════════════════════════════════════════
-
-def main():
-    root = tk.Tk()
-    root.title("水域机器人 3D 智能决策平台")
-    root.geometry("1100x700")
-    root.configure(bg=BG_UI)
-
-    ttk.Label(
-        root, text="水域机器人 3D 智能决策平台",
-        font=("Microsoft YaHei", 14, "bold"),
-        foreground=FG_TITLE, background=BG_UI,
-    ).pack(pady=8)
-
-    panel = Panel(root)
-    viewer = Scene3D(panel)
-    panel.viewer = viewer
-
-    def _down(e):
-        if "Control" in e.keysym:
-            panel.ctrl.set(True)
-        elif "Shift" in e.keysym:
-            panel.shift.set(True)
-
-    def _up(e):
-        if "Control" in e.keysym:
-            panel.ctrl.set(False)
-        elif "Shift" in e.keysym:
-            panel.shift.set(False)
-
-    root.bind("<KeyPress>", _down)
-    root.bind("<KeyRelease>", _up)
-
-    def _on_close():
-        viewer.stop_waves()
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", _on_close)
-    viewer.plotter.show(title="水域机器人 3D 智能决策平台", window_size=[820, 640])
-    root.mainloop()
+    def closeEvent(self, event):
+        if self.wave_timer:
+            self.wave_timer.stop()
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS)
+    app.setFont(QFont("Microsoft YaHei", 10))
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
