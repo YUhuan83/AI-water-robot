@@ -2,13 +2,13 @@
 水域智能感知与任务理解系统 — Tkinter 桌面版
 
 无需浏览器，直接运行。左键点击网格放置物体，右键清除。
-复用全部后端模块：water_grid, astar, llm_planner, renderer
+支持 2D 自定义场景 和 3D 真实数据模式。
 """
 
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk, ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +19,9 @@ from environment.water_grid import (
     demo_scene_trash_cleanup, demo_scene_buoy_inspection, demo_scene_patrol,
 )
 from planning.astar import plan_tsp_route, compute_path_length, astar
+from planning.astar3d import plan_tsp_3d, compute_3d_path_cost
+from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river
+from visualization.render3d import render_3d_scene
 from task_planner.llm_planner import rule_based_plan
 from visualization.renderer import render_static_path
 from config import OUTPUT_DIR
@@ -51,6 +54,11 @@ class DesktopApp:
         )
         self.use_preset = tk.BooleanVar(value=False)
         self.preset_name = tk.StringVar(value="垃圾清理")
+
+        # 3D 模式状态
+        self.mode_3d = tk.BooleanVar(value=False)
+        self.grid3d: Water3DGrid = None
+        self.path3d = None
 
         self._build_ui()
         self._draw_grid()
@@ -168,6 +176,33 @@ class DesktopApp:
         self.notebook.add(anim_tab, text="动画")
         self.anim_label = ttk.Label(anim_tab)
         self.anim_label.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 4: 3D 视图
+        view3d_tab = ttk.Frame(self.notebook)
+        self.notebook.add(view3d_tab, text="3D 视图")
+        self.view3d_label = ttk.Label(view3d_tab)
+        self.view3d_label.pack(fill=tk.BOTH, expand=True)
+
+        # ── 工具栏 ──
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
+        ttk.Checkbutton(
+            toolbar, text="3D 模式", variable=self.mode_3d,
+            command=self._on_mode_toggle,
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            toolbar, text="加载 JSON 数据", command=self._on_load_3d_json,
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            toolbar, text="3D Demo 沿海", command=self._on_load_3d_coastal,
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="3D Demo 河道", command=self._on_load_3d_river,
+        ).pack(side=tk.LEFT, padx=2)
+        self.lbl_3d_info = ttk.Label(
+            toolbar, text="", foreground="#aabbcc",
+        )
+        self.lbl_3d_info.pack(side=tk.LEFT, padx=10)
 
         # 状态栏
         self.status = ttk.Label(
@@ -314,10 +349,10 @@ class DesktopApp:
             self._draw_grid()
 
     # ═══════════════════════════════════════════════════════
-    # 执行任务
+    # 2D 执行任务
     # ═══════════════════════════════════════════════════════
 
-    def _on_execute(self):
+    def _on_execute_2d(self):
         self.status.config(text="正在执行...")
         self.root.update()
 
@@ -414,8 +449,132 @@ class DesktopApp:
         label.config(image=photo)
         label.image = photo  # 保持引用
 
+    # ═══════════════════════════════════════════════════════
+    # 3D 模式事件
+    # ═══════════════════════════════════════════════════════
 
-def main():
+    def _on_mode_toggle(self):
+        if self.mode_3d.get():
+            self.lbl_3d_info.config(text="[3D Mode] 加载数据后点击执行任务")
+            self.status.config(text="3D 模式 | 请加载 JSON 数据或选择 Demo")
+        else:
+            self.lbl_3d_info.config(text="")
+            self._draw_grid()
+
+    def _on_load_3d_json(self):
+        path = filedialog.askopenfilename(
+            title="选择水况数据 JSON 文件",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            self.grid3d = Water3DGrid.from_json(path)
+            self.mode_3d.set(True)
+            self._show_3d_scene()
+            self.lbl_3d_info.config(
+                text=f"[3D] {os.path.basename(path)} | "
+                     f"{self.grid3d.nx}x{self.grid3d.ny}x{self.grid3d.nz}"
+            )
+            self.status.config(text=f"已加载: {path}")
+        except Exception as e:
+            messagebox.showerror("加载失败", str(e))
+
+    def _on_load_3d_coastal(self):
+        self.grid3d = demo_3d_coastal()
+        self.mode_3d.set(True)
+        self._show_3d_scene()
+        self.lbl_3d_info.config(text="[3D] Coastal Demo | 30x30x8")
+        self.status.config(text="已加载 3D 沿海 Demo | 点击执行任务")
+
+    def _on_load_3d_river(self):
+        self.grid3d = demo_3d_river()
+        self.mode_3d.set(True)
+        self._show_3d_scene()
+        self.lbl_3d_info.config(text="[3D] River Demo | 40x15x5")
+        self.status.config(text="已加载 3D 河道 Demo | 点击执行任务")
+
+    def _show_3d_scene(self):
+        if self.grid3d is None:
+            return
+        try:
+            img_path = os.path.join(OUTPUT_DIR, "view_3d.png")
+            render_3d_scene(self.grid3d, self.path3d, img_path,
+                            figsize=(8, 6), view_angle=(25, -55))
+            self._show_image(img_path, self.view3d_label, max_size=420)
+            self.notebook.select(3)
+        except Exception as e:
+            messagebox.showerror("3D 渲染失败", str(e))
+
+    def _on_execute_3d(self):
+        if self.grid3d is None:
+            messagebox.showwarning("警告", "请先加载 3D 数据")
+            return
+
+        start = self.grid3d.mission_start
+        waypoints = self.grid3d.mission_waypoints
+        end = self.grid3d.mission_end
+
+        if not start or not waypoints:
+            messagebox.showwarning("警告", "3D 数据中缺少任务定义 (start/waypoints)")
+            return
+
+        self.status.config(text="3D 规划中...")
+        self.root.update()
+
+        try:
+            # 3D 路径规划
+            self.path3d = plan_tsp_3d(self.grid3d, start, waypoints, end)
+            if self.path3d is None:
+                messagebox.showerror("无法完成任务", "3D 路径规划失败")
+                self.status.config(text="3D 规划失败")
+                return
+
+            dist, flow, depth_cost = compute_3d_path_cost(self.grid3d, self.path3d)
+
+            # 任务规划文本
+            instruction = self.task_instruction.get()
+            plan = rule_based_plan(instruction)
+            plan_display = f"指令: {instruction}\n\n"
+            plan_display += f"概述: {plan.get('summary', '')}\n\n"
+            for i, t in enumerate(plan.get("tasks", []), 1):
+                plan_display += f"  [{i}] {t.get('action')} -> {t.get('target')}: {t.get('reason')}\n"
+            plan_display += (
+                f"\n--- 3D 路径结果 ---\n"
+                f"步数: {len(self.path3d)}\n"
+                f"总距离: {dist} m\n"
+                f"水流代价: {flow}\n"
+                f"深度变化代价: {depth_cost}\n"
+                f"起点: {start}  终点: {self.path3d[-1]}"
+            )
+
+            self.plan_text.delete("1.0", tk.END)
+            self.plan_text.insert("1.0", plan_display)
+            self.notebook.select(0)
+
+            # 3D 视图
+            self._show_3d_scene()
+
+            self.status.config(
+                text=f"3D 完成! {len(self.path3d)}步, {dist}m, "
+                     f"水流代价={flow}"
+            )
+        except Exception as e:
+            messagebox.showerror("错误", str(e))
+            self.status.config(text=f"错误: {e}")
+
+    # ═══════════════════════════════════════════════════════
+    # 执行任务（分发 2D/3D）
+    # ═══════════════════════════════════════════════════════
+
+    def _on_execute(self):
+        if self.mode_3d.get() and self.grid3d is not None:
+            self._on_execute_3d()
+        else:
+            self._on_execute_2d()
+
+    # 将原来的 _on_execute 重命名
+    def _on_execute_2d(self):
     root = tk.Tk()
     root.geometry("1100x720")
     try:
