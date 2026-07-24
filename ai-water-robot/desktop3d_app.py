@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QDialog, QFormLayout, QDialogButtonBox, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon
+from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QKeySequence
 
 from pyvistaqt import QtInteractor
 import pyvista as pv
@@ -111,7 +111,10 @@ class MainWindow(QMainWindow):
 
         ai_menu = mb.addMenu("AI(&A)")
         ai_menu.addAction("LLM 设置...", self._open_llm_settings)
-        ai_menu.addAction("启用 AI 决策", self._toggle_llm, checkable=True)
+        self.ai_toggle_action = QAction("启用 AI 决策", self)
+        self.ai_toggle_action.setCheckable(True)
+        self.ai_toggle_action.toggled.connect(self._toggle_llm)
+        ai_menu.addAction(self.ai_toggle_action)
 
         demo_menu = mb.addMenu("演示(&D)")
         demo_menu.addAction("沿海水域", self._load_coastal)
@@ -502,11 +505,12 @@ class MainWindow(QMainWindow):
                 self.lbl_ai.setText("LLM 未配置 — 请先设置 API")
 
     def _toggle_llm(self, checked):
-        self.llm_enabled = checked and bool(self.llm_api_key)
+        self.llm_enabled = bool(checked) and bool(self.llm_api_key)
         if self.llm_enabled:
             self.planner = TaskPlanner(self.llm_api_key, self.llm_base_url, self.llm_model)
             self.lbl_ai.setText(f"LLM 已启用: {self.llm_model}")
         else:
+            self.ai_toggle_action.setChecked(False)
             self.planner = None
             self.lbl_ai.setText("LLM 已禁用")
 
