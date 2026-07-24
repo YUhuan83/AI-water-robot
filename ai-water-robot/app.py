@@ -423,7 +423,7 @@ def build_ui():
         gr.HTML("""
         <div style="text-align:center; color:#688; padding:20px; font-size:0.85em;">
             <p>技术栈: DeepSeek LLM · YOLOv8 · A* 路径规划 · Gradio · Matplotlib</p>
-            <p>面向中山大学单云霄课题组 · 水上机器人方向</p>
+            <p>AI + 水上机器人仿真演练项目</p>
         </div>
         """)
 
