@@ -66,8 +66,8 @@ QPushButton#btnDanger:hover {{ background: #e74c3c; }}
 QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 8px; margin-top: 12px; padding-top: 18px; background: {C['panel']}; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #1a2a3a; font-size: 13px; font-weight: bold; }}
 QTextEdit {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; font-size: 12px; color: {C['text']}; }}
-QLabel {{ color: {C['text']}; }}
-QLineEdit {{ color: {C['text']}; background: white; border: 1px solid {C['border']}; border-radius: 6px; padding: 6px; font-size: 13px; }}
+QLabel {{ color: #111; font-size: 13px; }}
+QLineEdit {{ color: #111; background: white; border: 1px solid #aab5c0; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-weight: bold; }}
 QStatusBar {{ background: {C['panel']}; border-top: 1px solid {C['border']}; font-size: 12px; }}
 QDockWidget {{ font-size: 13px; color: {C['text']}; }}
 """
@@ -172,9 +172,9 @@ class MainWindow(QMainWindow):
         # 结果
         g2 = QGroupBox("路径规划结果")
         l2 = QGridLayout(g2)
-        self.lbl_dist = QLabel("总距离: --"); self.lbl_dist.setStyleSheet("font-size:16px;font-weight:bold;color:#e8590c")
-        self.lbl_flow = QLabel("水流代价: --"); self.lbl_flow.setStyleSheet("font-size:14px;color:#2980b9")
-        self.lbl_depth = QLabel("深度代价: --"); self.lbl_depth.setStyleSheet("font-size:14px;color:#27ae60")
+        self.lbl_dist = QLabel("总距离: --"); self.lbl_dist.setStyleSheet("font-size:18px;font-weight:bold;color:#c0392b")
+        self.lbl_flow = QLabel("水流代价: --"); self.lbl_flow.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5276")
+        self.lbl_depth = QLabel("深度代价: --"); self.lbl_depth.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5c2a")
         l2.addWidget(self.lbl_dist, 0, 0)
         l2.addWidget(self.lbl_flow, 1, 0)
         l2.addWidget(self.lbl_depth, 2, 0)
