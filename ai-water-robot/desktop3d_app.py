@@ -67,6 +67,7 @@ QGroupBox {{ font-weight: bold; border: 1px solid {C['border']}; border-radius: 
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {C['text']}; }}
 QTextEdit {{ background: {C['panel']}; border: 1px solid {C['border']}; border-radius: 6px; font-size: 12px; color: {C['text']}; }}
 QLabel {{ color: {C['text']}; }}
+QLineEdit {{ color: {C['text']}; background: white; border: 1px solid {C['border']}; border-radius: 6px; padding: 6px; font-size: 13px; }}
 QStatusBar {{ background: {C['panel']}; border-top: 1px solid {C['border']}; font-size: 12px; }}
 QDockWidget {{ font-size: 13px; color: {C['text']}; }}
 """
@@ -196,8 +197,8 @@ class MainWindow(QMainWindow):
         self.btn_plan_task.clicked.connect(self._ai_task_plan)
         h_ai.addWidget(self.btn_plan_task)
         l3.addLayout(h_ai)
-        self.lbl_ai = QLabel("LLM 未配置 — 请先设置 API")
-        self.lbl_ai.setStyleSheet("color:#7f8c8d; font-size:11px;")
+        self.lbl_ai = QLabel("LLM 未配置 — 请先在菜单 AI > LLM 设置中配置 API Key")
+        self.lbl_ai.setStyleSheet("color:#2c3e50; font-size:12px; font-weight:bold; background:#f0f4f8; padding:6px; border-radius:4px;")
         self.lbl_ai.setWordWrap(True)
         l3.addWidget(self.lbl_ai)
         lay.addWidget(g3)
@@ -211,7 +212,7 @@ class MainWindow(QMainWindow):
             "左键拖拽 = 旋转 | 右键 = 平移\n"
             "滚轮 = 缩放"
         )
-        tips.setStyleSheet("color:#7f8c8d; font-size:12px;")
+        tips.setStyleSheet("color:#5a6a7a; font-size:12px;")
         l4.addWidget(tips)
         lay.addWidget(g4)
 
