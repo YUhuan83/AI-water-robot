@@ -110,9 +110,9 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("退出", self.close, "Alt+F4")
 
-        ai_menu = mb.addMenu("AI(&A)")
-        ai_menu.addAction("LLM 设置...", self._open_llm_settings)
-        self.ai_toggle_action = QAction("启用 AI 决策", self)
+        ai_menu = mb.addMenu("决策(&D)")
+        ai_menu.addAction("大模型设置...", self._open_llm_settings)
+        self.ai_toggle_action = QAction("启用智能决策", self)
         self.ai_toggle_action.setCheckable(True)
         self.ai_toggle_action.toggled.connect(self._toggle_llm)
         ai_menu.addAction(self.ai_toggle_action)
@@ -180,8 +180,8 @@ class MainWindow(QMainWindow):
         l2.addWidget(self.lbl_depth, 2, 0)
         lay.addWidget(g2)
 
-        # AI 决策
-        g3 = QGroupBox("AI 决策")
+        # 智能决策
+        g3 = QGroupBox("智能决策")
         l3 = QVBoxLayout(g3)
         l3.setSpacing(6)
         self.ai_input = QLineEdit()
@@ -189,15 +189,15 @@ class MainWindow(QMainWindow):
         self.ai_input.setMinimumHeight(32)
         l3.addWidget(self.ai_input)
         h_ai = QHBoxLayout()
-        self.btn_analyze = QPushButton("AI 分析决策")
+        self.btn_analyze = QPushButton("分析决策")
         self.btn_analyze.setObjectName("btnPrimary")
         self.btn_analyze.clicked.connect(self._ai_analyze)
         h_ai.addWidget(self.btn_analyze)
-        self.btn_plan_task = QPushButton("AI 任务规划")
+        self.btn_plan_task = QPushButton("任务规划")
         self.btn_plan_task.clicked.connect(self._ai_task_plan)
         h_ai.addWidget(self.btn_plan_task)
         l3.addLayout(h_ai)
-        self.lbl_ai = QLabel("LLM 未配置 — 请先在菜单 AI > LLM 设置中配置 API Key")
+        self.lbl_ai = QLabel("大模型未配置 — 请先在菜单 决策 > 大模型设置 中配置 API Key")
         self.lbl_ai.setStyleSheet("color:#2c3e50; font-size:12px; font-weight:bold; background:#f0f4f8; padding:6px; border-radius:4px;")
         self.lbl_ai.setWordWrap(True)
         l3.addWidget(self.lbl_ai)
@@ -461,11 +461,11 @@ class MainWindow(QMainWindow):
             f"起点: {g.mission_start or '未设定'}"
         )
 
-    # ═══════════════════ AI 决策 ═══════════════════
+    # ═══════════════════ 智能决策 ═══════════════════
 
     def _open_llm_settings(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("LLM API 设置")
+        dlg.setWindowTitle("大模型 API 设置")
         dlg.setMinimumWidth(420)
         layout = QFormLayout(dlg)
         layout.setSpacing(10)
@@ -499,25 +499,25 @@ class MainWindow(QMainWindow):
             self.llm_enabled = bool(self.llm_api_key)
             if self.llm_enabled:
                 self.planner = TaskPlanner(self.llm_api_key, self.llm_base_url, self.llm_model)
-                self.lbl_ai.setText(f"LLM 已配置: {self.llm_model}")
-                self.status_bar.showMessage(f"LLM 已连接: {self.llm_model}")
+                self.lbl_ai.setText(f"大模型已配置: {self.llm_model}")
+                self.status_bar.showMessage(f"大模型已连接: {self.llm_model}")
             else:
                 self.planner = None
-                self.lbl_ai.setText("LLM 未配置 — 请先设置 API")
+                self.lbl_ai.setText("大模型未配置 — 请先设置 API Key")
 
     def _toggle_llm(self, checked):
         self.llm_enabled = bool(checked) and bool(self.llm_api_key)
         if self.llm_enabled:
             self.planner = TaskPlanner(self.llm_api_key, self.llm_base_url, self.llm_model)
-            self.lbl_ai.setText(f"LLM 已启用: {self.llm_model}")
+            self.lbl_ai.setText(f"智能决策已启用: {self.llm_model}")
         else:
             self.ai_toggle_action.setChecked(False)
             self.planner = None
-            self.lbl_ai.setText("LLM 已禁用")
+            self.lbl_ai.setText("智能决策已禁用")
 
     def _ai_analyze(self):
         if not self.llm_enabled or self.planner is None:
-            QMessageBox.warning(self, "LLM 未配置", "请先在菜单 AI → LLM 设置中配置 API Key")
+            QMessageBox.warning(self, "大模型未配置", "请先在菜单 决策 > 大模型设置 中配置 API Key")
             return
         if self.grid is None:
             QMessageBox.warning(self, "无数据", "请先加载水况数据")
@@ -527,34 +527,32 @@ class MainWindow(QMainWindow):
         n_obs = int(np.sum(self.grid.obstacles))
         n_wp = len(self.grid.mission_waypoints)
 
-        # 构建场景上下文
         context = (
-            f"网格: {self.grid.nx}×{self.grid.ny}×{self.grid.nz}, 精度: {self.grid.resolution}m/格\n"
+            f"网格: {self.grid.nx}x{self.grid.ny}x{self.grid.nz}, 精度: {self.grid.resolution}m/格\n"
             f"障碍物: {n_obs}个, 途经点: {n_wp}个\n"
             f"起点: {self.grid.mission_start}, 终点: {self.grid.mission_end or '未设定'}\n"
             f"水深范围: {self.grid.depth[self.grid.depth>0].min():.1f}~{self.grid.depth.max():.1f}m\n"
             f"水流: 表层 {self.grid.current_speeds['surface'].mean():.2f} m/s"
         )
 
-        self.status_bar.showMessage("AI 分析中...")
+        self.status_bar.showMessage("智能分析中...")
         try:
             result = self.planner.analyze_scene(instruction, context)
             self.lbl_ai.setText(
-                f"[AI] {result.get('recommendation', '')}\n"
+                f"{result.get('recommendation', '')}\n"
                 f"策略: {result.get('suggested_strategy', 'N/A')} | "
                 f"风险: {result.get('risk_assessment', 'N/A')}"
             )
-            self.status_bar.showMessage(f"AI 决策完成: {result.get('suggested_strategy', '')}")
+            self.status_bar.showMessage(f"决策完成: {result.get('suggested_strategy', '')}")
         except Exception as e:
-            self.lbl_ai.setText(f"AI 调用失败: {e}")
-            # 回退到规则模式
+            self.lbl_ai.setText(f"调用失败: {e}")
             plan = rule_based_plan(instruction)
             self.lbl_ai.setText(f"[规则模式] {plan.get('summary', '')}")
-            self.status_bar.showMessage("AI 调用失败，已使用规则模式")
+            self.status_bar.showMessage("调用失败，已使用规则模式")
 
     def _ai_task_plan(self):
         if not self.llm_enabled or self.planner is None:
-            QMessageBox.warning(self, "LLM 未配置", "请先在菜单 AI → LLM 设置中配置 API Key")
+            QMessageBox.warning(self, "大模型未配置", "请先在菜单 决策 > 大模型设置 中配置 API Key")
             return
         if self.grid is None:
             QMessageBox.warning(self, "无数据", "请先加载水况数据")
@@ -565,17 +563,17 @@ class MainWindow(QMainWindow):
             instruction = "从起点出发，经过所有途经点，最后返回码头"
         self.ai_input.setText(instruction)
 
-        self.status_bar.showMessage("AI 任务规划中...")
+        self.status_bar.showMessage("任务规划中...")
         try:
             plan = self.planner.plan(instruction)
             result = self.planner.format_plan_display(plan)
             self.lbl_ai.setText(result)
             self.lbl_info.setPlainText(self.lbl_info.toPlainText() + "\n\n" + result)
-            self.status_bar.showMessage("AI 任务规划完成")
+            self.status_bar.showMessage("任务规划完成")
         except Exception as e:
             plan = rule_based_plan(instruction)
             self.lbl_ai.setText(f"[规则模式] {plan.get('summary', '')}")
-            self.status_bar.showMessage(f"AI 调用失败: {e}，已使用规则模式")
+            self.status_bar.showMessage(f"调用失败: {e}，已使用规则模式")
 
     def closeEvent(self, event):
         if self.wave_timer:
