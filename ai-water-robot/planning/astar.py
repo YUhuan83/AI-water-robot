@@ -92,6 +92,15 @@ def astar(
             if neighbor in closed_set:
                 continue
 
+            # 对角线移动时检查"切角"：1x1方块不能从两个对角障碍物中间挤过
+            if dr != 0 and dc != 0:
+                # 检查两个对角相邻格是否都是障碍物
+                corner_a = (current[0] + dr, current[1])   # (r+dr, c)
+                corner_b = (current[0], current[1] + dc)   # (r, c+dc)
+                if (grid[corner_a[0], corner_a[1]] == 1 and
+                    grid[corner_b[0], corner_b[1]] == 1):
+                    continue  # 船无法从两个障碍物中间挤过
+
             tentative_g = g_score[current] + move_cost
 
             if tentative_g < g_score.get(neighbor, float("inf")):

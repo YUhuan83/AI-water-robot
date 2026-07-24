@@ -23,7 +23,7 @@ from environment.water_grid import (
     EditableScene, render_editable_grid,
 )
 from environment.water_grid import OBSTACLE, BUOY, TRASH, ROBOT, WATER
-from planning.astar import plan_multi_point_route, compute_path_length, plan_tsp_route
+from planning.astar import plan_multi_point_route, compute_path_length, plan_tsp_route, astar
 from task_planner.llm_planner import TaskPlanner, rule_based_plan
 from visualization.renderer import SimulationRenderer, render_static_path
 from config import DEFAULT_GRID_SIZE, OUTPUT_DIR
@@ -136,9 +136,30 @@ def process_pipeline(
 
         # 使用 TSP 巡回规划（支持返回码头）
         dock = scene.dock_pos
+
+        # 先检查目标可达性
+        unreachable = []
+        for t in all_targets:
+            if astar(obs_grid, robot_pos, t) is None:
+                unreachable.append(t)
+        if unreachable:
+            targets_str = ", ".join([str(t) for t in unreachable[:5]])
+            if len(unreachable) > 5:
+                targets_str += f" 等共{len(unreachable)}个目标"
+            return _error_result(
+                f"无法完成任务：以下目标被障碍物完全阻挡，船无法到达\n"
+                f"不可达目标: {targets_str}\n"
+                f"提示: 请移除阻挡的障碍物或调整目标位置",
+                results,
+            )
+
         path = plan_tsp_route(obs_grid, robot_pos, all_targets, end=dock)
         if path is None:
-            return _error_result("无法找到可行路径", results)
+            return _error_result(
+                "无法完成任务：障碍物阻挡导致无法规划出经过所有目标并返回码头的完整路径\n"
+                "提示: 请移除部分障碍物后重试",
+                results,
+            )
 
         path_length = compute_path_length(path)
         path_text = (
