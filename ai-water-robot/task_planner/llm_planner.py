@@ -216,6 +216,60 @@ class TaskPlanner:
 
         return "\n".join(lines)
 
+    def analyze_scene(self, user_instruction: str, scene_context: str) -> Dict:
+        """
+        综合场景信息进行 AI 决策分析
+
+        Args:
+            user_instruction: 用户自然语言指令
+            scene_context: 场景描述文本（障碍物数量、水流情况、目标位置等）
+
+        Returns:
+            {"recommendation": "...", "priority_targets": [...], "avoid_areas": [...]}
+        """
+        self._ensure_client()
+
+        prompt = f"""你是一个水上机器人决策专家。根据场景信息和用户需求，给出路径规划建议。
+
+## 场景信息
+{scene_context}
+
+## 用户需求
+{user_instruction}
+
+## 输出格式（严格 JSON）
+{{
+  "recommendation": "一句话建议",
+  "priority_targets": ["应优先访问的目标坐标或描述"],
+  "avoid_areas": ["应避开的区域描述"],
+  "risk_assessment": "风险评估（低/中/高）",
+  "suggested_strategy": "建议策略（如:顺流优先/最短路径/安全优先）"
+}}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": prompt}],
+                temperature=0.3, max_tokens=512,
+            )
+            content = response.choices[0].message.content.strip()
+            # 提取 JSON
+            code_block = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+            if code_block:
+                content = code_block.group(1)
+            start, end = content.find("{"), content.rfind("}")
+            if start != -1 and end != -1:
+                return json.loads(content[start:end + 1])
+        except Exception:
+            pass
+        return {
+            "recommendation": "使用默认规划策略",
+            "priority_targets": [],
+            "avoid_areas": [],
+            "risk_assessment": "低",
+            "suggested_strategy": "最短路径",
+        }
+
 
 # ═══════════════════════════════════════════════════════════
 # 离线模式（当无法访问 API 时使用规则匹配）

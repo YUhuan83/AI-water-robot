@@ -573,15 +573,15 @@ class DesktopApp:
         else:
             self._on_execute_2d()
 
-    # 将原来的 _on_execute 重命名
-    def _on_execute_2d(self):
+
+def main():
     root = tk.Tk()
     root.geometry("1100x720")
     try:
         root.iconbitmap(default=None)
-    except:
+    except Exception:
         pass
-    app = DesktopApp(root)
+    DesktopApp(root)
     root.mainloop()
 
 
