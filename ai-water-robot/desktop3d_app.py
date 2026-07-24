@@ -53,10 +53,11 @@ class Water3DViewer:
         )
         self._add_empty_scene()
 
-        # 键盘事件: Ctrl=障碍物, Shift=途经点
-        self.plotter.enable_surface_picking(
+        # 点击选取: Ctrl=障碍物, Shift=途经点, 普通点击=无操作
+        self.plotter.enable_point_picking(
             callback=self._on_pick, show_point=True,
-            pickable_window=False,  # only fire when Ctrl/Shift held
+            show_message="Click: pick 3D point. Ctrl=Obstacle, Shift=Waypoint",
+            font_size=10,
         )
 
     def _add_empty_scene(self):
@@ -200,7 +201,16 @@ class Water3DViewer:
         """处理 3D 点击"""
         if point is None:
             return
-        x, y, z = int(round(point[0])), int(round(point[1])), -int(round(point[2]))
+        # PyVista 0.48: callback receives pyvista DataSet or tuple
+        # Try to extract coordinates
+        try:
+            if hasattr(point, 'points'):
+                pt = point.points[0]
+            else:
+                pt = point
+            x, y, z = int(round(float(pt[0]))), int(round(float(pt[1]))), -int(round(float(pt[2])))
+        except (TypeError, IndexError, ValueError):
+            return
 
         if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny):
             return
