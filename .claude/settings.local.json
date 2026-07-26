@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell($env:HTTPS_PROXY = \"http://127.0.0.1:7897\"; $env:HTTP_PROXY = \"http://127.0.0.1:7897\"; & \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" auth login --web 2>&1)"
-    ]
-  }
-}
