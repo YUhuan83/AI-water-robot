@@ -206,6 +206,9 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._btn("撤销", self._undo))
         tb.addWidget(self._btn("清除途经点", self._clear_wp))
         tb.addWidget(self._btn("清除障碍物", self._clear_obs))
+        tb.addSeparator()
+        tb.addWidget(self._btn("保存任务", self._save_mission))
+        tb.addWidget(self._btn("加载任务", self._load_mission))
         tb.addWidget(self._btn("重置场景", self._clear_all, danger=True))
 
         # 状态栏
@@ -349,6 +352,26 @@ class MainWindow(QMainWindow):
         l_coord.addWidget(self.lbl_coord_range)
         lay.addWidget(g_coord)
 
+        # 途经点管理列表
+        g_wp = QGroupBox("途经点管理")
+        l_wp = QVBoxLayout(g_wp)
+        l_wp.setSpacing(4)
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+        self.wp_list = QListWidget()
+        self.wp_list.setMaximumHeight(100)
+        self.wp_list.setStyleSheet("font-size:11px; color:#2c3e50;")
+        self.wp_list.setToolTip("双击途经点删除")
+        self.wp_list.itemDoubleClicked.connect(self._delete_waypoint_by_item)
+        l_wp.addWidget(self.wp_list)
+        h_wp_btns = QHBoxLayout()
+        h_wp_btns.addWidget(self._btn("清空途经点", self._clear_wp, danger=False))
+        self.btn_del_last_wp = QPushButton("删除最后一个")
+        self.btn_del_last_wp.clicked.connect(self._delete_last_waypoint)
+        self.btn_del_last_wp.setStyleSheet("font-size:11px; padding:4px 8px;")
+        h_wp_btns.addWidget(self.btn_del_last_wp)
+        l_wp.addLayout(h_wp_btns)
+        lay.addWidget(g_wp)
+
         # 操作提示
         g5 = QGroupBox("操作提示")
         l5 = QVBoxLayout(g5)
@@ -420,9 +443,14 @@ class MainWindow(QMainWindow):
             return
         if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny):
             return
-        # 从面板读取当前深度层
         z = self.depth_combo.currentIndex()
         z = max(0, min(z, self.grid.nz - 1))
+
+        # 同步到坐标输入面板
+        self.input_x.setText(str(x))
+        self.input_y.setText(str(y))
+        self.input_z.setText(str(z))
+
         self._push_undo()
         if self.ctrl_held:
             # Ctrl+右键: 切换障碍物
@@ -443,6 +471,7 @@ class MainWindow(QMainWindow):
         self.plotter.clear()
         self._draw()
         self._refresh_info()
+        self._refresh_wp_list()
         self.status_bar.showMessage(action)
 
     # ═══════════════════ 数据加载 ═══════════════════
@@ -458,6 +487,7 @@ class MainWindow(QMainWindow):
         self.plotter.reset_camera()
         self._refresh_info()
         self._update_coord_range()
+        self._refresh_wp_list()
 
     def _open_json(self):
         p, _ = QFileDialog.getOpenFileName(self, "打开 JSON 文件", "", "JSON (*.json);;所有文件 (*)")
@@ -519,25 +549,40 @@ class MainWindow(QMainWindow):
         g = self.grid
         nx, ny, nz = g.nx, g.ny, g.nz
 
-        # 海底
+        # 海底 — 按深度着色（浅水亮→深水暗）
         dv = np.full((ny, nx), np.nan, dtype=np.float32)
+        depth_norm = np.zeros((ny, nx), dtype=np.float32)
         for y in range(ny):
             for x in range(nx):
                 if g.depth[y, x] > 0:
                     dv[y, x] = -(g.depth[y, x] / max(1, g.depth.max())) * nz * 0.8
+                    depth_norm[y, x] = g.depth[y, x] / max(1, g.depth.max())
         gx, gy = np.meshgrid(range(nx), range(ny))
         seabed = pv.StructuredGrid(gx, gy, dv)
-        self.plotter.add_mesh(seabed, color="#889966", opacity=0.45, name="seabed", show_edges=False)
+        # 将归一化深度值作为scalars用于着色
+        seabed["depth_norm"] = depth_norm.ravel(order="F")
+        self.plotter.add_mesh(
+            seabed, scalars="depth_norm", cmap="terrain",
+            opacity=0.55, name="seabed", show_edges=False, clim=[0, 1],
+        )
 
-        # 海底等深线（每隔一定深度绘制轮廓线）
+        # 海底等深线
         try:
             contours = seabed.contour()
             if contours.n_points > 0:
                 self.plotter.add_mesh(
-                    contours, color="#445533", opacity=0.5, line_width=1.5, name="depth_contours",
+                    contours, color="#333333", opacity=0.35, line_width=1.2, name="depth_contours",
                 )
         except Exception:
-            pass  # 轮廓提取失败时静默跳过
+            pass
+
+        # 水面半透明参考网格
+        water_grid = pv.Plane(center=(nx/2, ny/2, 0), direction=(0, 0, 1),
+                               i_size=nx, j_size=ny, i_resolution=nx, j_resolution=ny)
+        self.plotter.add_mesh(
+            water_grid, color="#88ccff", opacity=0.12, name="water_surface",
+            show_edges=True, edge_color="#aaccdd", style="wireframe",
+        )
 
         # 障碍物
         for z in range(nz):
@@ -753,6 +798,7 @@ class MainWindow(QMainWindow):
         self.plotter.clear()
         self._draw()
         self._refresh_info()
+        self._refresh_wp_list()
         self.status_bar.showMessage(msg)
 
     def _update_coord_range(self):
@@ -822,6 +868,37 @@ class MainWindow(QMainWindow):
             self.grid.mission_waypoints = []
             self.plotter.clear()
             self._draw()
+            self._refresh_wp_list()
+
+    def _delete_last_waypoint(self):
+        """删除最后一个途经点"""
+        if self.grid and self.grid.mission_waypoints:
+            self._push_undo()
+            removed = self.grid.mission_waypoints.pop()
+            self.plotter.clear()
+            self._draw()
+            self._refresh_wp_list()
+            self.status_bar.showMessage(f"已删除途经点: {removed}")
+
+    def _delete_waypoint_by_item(self, item):
+        """双击途经点列表项删除"""
+        idx = self.wp_list.row(item)
+        if self.grid and 0 <= idx < len(self.grid.mission_waypoints):
+            self._push_undo()
+            removed = self.grid.mission_waypoints.pop(idx)
+            self.plotter.clear()
+            self._draw()
+            self._refresh_wp_list()
+            self.status_bar.showMessage(f"已删除途经点[{idx}]: {removed}")
+
+    def _refresh_wp_list(self):
+        """刷新途经点列表显示"""
+        self.wp_list.clear()
+        if self.grid:
+            for i, wp in enumerate(self.grid.mission_waypoints):
+                item = QListWidgetItem(f"WP{i+1}: ({wp[0]}, {wp[1]}, z={wp[2]})")
+                item.setToolTip("双击删除此途经点")
+                self.wp_list.addItem(item)
 
     def _clear_obs(self):
         if self.grid:
@@ -845,6 +922,7 @@ class MainWindow(QMainWindow):
             self._refresh_info()
             # 停止动画
             self._anim_stop()
+            self._refresh_wp_list()
             self.status_bar.showMessage("场景已重置 — 右键设置起点开始规划")
 
     def _reset_view(self):
@@ -1273,6 +1351,72 @@ class MainWindow(QMainWindow):
                              height=3.5, radius=1.8, resolution=20)
         self.fov_actor = self.plotter.add_mesh(cone, color="#ffcc44", opacity=0.22, name="fov")
 
+    # ═══════════════════ 任务保存/加载 ═══════════════════
+
+    def _save_mission(self):
+        """快捷保存当前任务配置（起点/途经点/终点/障碍物）"""
+        g = self.grid
+        if not g:
+            QMessageBox.warning(self, "无数据", "请先加载场景数据")
+            return
+        p, _ = QFileDialog.getSaveFileName(self, "保存任务配置", "mission_config.json", "JSON (*.json)")
+        if not p:
+            return
+        data = {
+            "start": list(g.mission_start) if g.mission_start else None,
+            "waypoints": [list(w) for w in g.mission_waypoints],
+            "end": list(g.mission_end) if g.mission_end else None,
+            "obstacles": [
+                [int(z), int(y), int(x)]
+                for z in range(g.nz) for y in range(g.ny) for x in range(g.nx)
+                if g.obstacles[z, y, x]
+            ],
+            "strategy": self.current_strategy,
+        }
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.status_bar.showMessage(f"任务已保存: {os.path.basename(p)}")
+
+    def _load_mission(self):
+        """快捷加载任务配置"""
+        g = self.grid
+        if not g:
+            QMessageBox.warning(self, "无数据", "请先加载场景数据")
+            return
+        p, _ = QFileDialog.getOpenFileName(self, "加载任务配置", "", "JSON (*.json);;所有文件 (*)")
+        if not p:
+            return
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._push_undo()
+            g.mission_start = tuple(data["start"]) if data.get("start") else None
+            g.mission_waypoints = [tuple(w) for w in data.get("waypoints", [])]
+            g.mission_end = tuple(data["end"]) if data.get("end") else None
+            # 清空并重建障碍物
+            g.obstacles[:] = False
+            for obs in data.get("obstacles", []):
+                z, y, x = obs
+                if 0 <= x < g.nx and 0 <= y < g.ny and 0 <= z < g.nz:
+                    g.obstacles[z, y, x] = True
+            # 恢复策略
+            strat = data.get("strategy", "balanced")
+            if strat in ("balanced", "safe", "fast", "energy"):
+                self.current_strategy = strat
+                strategy_map = {"balanced": 0, "safe": 1, "fast": 2, "energy": 3}
+                self.strategy_combo.setCurrentIndex(strategy_map.get(strat, 0))
+            # 重绘
+            self.path3d = None
+            self.path_actor = None
+            self.plotter.clear()
+            self._draw()
+            self._refresh_info()
+            self._refresh_wp_list()
+            self.status_bar.showMessage(f"任务已加载: {os.path.basename(p)} — "
+                                       f"起点={g.mission_start}, 途经点={len(g.mission_waypoints)}, 终点={g.mission_end}")
+        except Exception as e:
+            QMessageBox.critical(self, "加载失败", f"无法解析任务文件:\n{e}")
+
     # ═══════════════════ 撤销 ═══════════════════
 
     def _push_undo(self):
@@ -1299,6 +1443,7 @@ class MainWindow(QMainWindow):
         self.plotter.clear()
         self._draw()
         self._refresh_info()
+        self._refresh_wp_list()
         self.status_bar.showMessage("已撤销")
 
     # ═══════════════════ 导出 ═══════════════════
