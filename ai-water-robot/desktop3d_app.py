@@ -96,11 +96,14 @@ class MainWindow(QMainWindow):
         self.anim_speed = 1.0
         self.anim_robot = None       # 船身主体 actor
         self.anim_robot_cabin = None # 船舱 actor
+        self._boat_bow_actor = None  # 船头三角 actor
+        self._boat_templates = None  # (hull, cabin, bow) 模板网格
         self.fov_actor = None
         self.sensor_actor = None
         self.boat_heading = 0.0      # 船头朝向（弧度）
         self.boat_speed_kn = 0.0     # 当前航速（节）
         self.last_boat_pos = None    # 上帧位置（用于速度计算）
+        self._frame_count = 0        # 帧计数器（用于降频更新）
 
         # HUD 文字
         self.hud_texts = []
@@ -539,8 +542,8 @@ class MainWindow(QMainWindow):
                             color=C["danger"], opacity=0.88, name=f"o.{x}.{y}.{z}",
                         )
 
-        # 水流（使用合成水流 = 基础流 + 漩涡 + 风生流）
-        step = max(1, min(nx, ny) // 10)
+        # 水流（使用合成水流 = 基础流 + 漩涡 + 风生流）— 降低密度
+        step = max(2, min(nx, ny) // 5)
         for y in range(0, ny, step):
             for x in range(0, nx, step):
                 if g.depth[y, x] <= 0:
@@ -560,8 +563,8 @@ class MainWindow(QMainWindow):
                 pv.Sphere(center=(cx, cy, 0.1), radius=0.3),
                 color="#9933cc", opacity=0.6, name=f"eddy_c_{cx}_{cy}",
             )
-            # 漩涡环 (用多个箭头标示旋转方向)
-            n_arrows = 12
+            # 漩涡环 (用箭头标示旋转方向) — 减少箭头数
+            n_arrows = 6
             for i in range(n_arrows):
                 angle = 2 * math.pi * i / n_arrows
                 ax, ay = cx + math.cos(angle) * radius * 0.7, cy + math.sin(angle) * radius * 0.7
@@ -671,13 +674,14 @@ class MainWindow(QMainWindow):
             return
         self.wave_timer = QTimer(self)
         self.wave_timer.timeout.connect(self._animate_wave)
-        self.wave_timer.start(80)
+        self.wave_timer.start(200)  # 200ms间隔（原80ms），降低CPU占用
 
     def _animate_wave(self):
         if self.grid is None:
             return
-        self.wave_time += 0.08
-        r = max(2, min(self.grid.nx, self.grid.ny) // 2)
+        self.wave_time += 0.20
+        # 降低波浪网格分辨率：r取1/3而非1/2
+        r = max(2, min(self.grid.nx, self.grid.ny) // 3)
         xx, yy = np.meshgrid(np.linspace(0, self.grid.nx, r * 2), np.linspace(0, self.grid.ny, r * 2))
         t = self.wave_time
         zz = (0.12 * np.sin(xx * 0.6 + t * 2.5) * np.cos(yy * 0.5 + t * 1.8)
@@ -841,41 +845,60 @@ class MainWindow(QMainWindow):
 
     # ═══════════════════ 船形机器人模型 ═══════════════════
 
-    def _make_boat_actors(self, pos, heading_rad):
-        """创建船形机器人（船身+船舱），返回 (hull_actor, cabin_actor)
-
-        船头方向为 +x，heading_rad 从 +x 轴逆时针旋转
-        """
-        x, y, z = pos
-        # 船身：拉伸的六面体 — 模拟 V 型船体
+    def _create_boat_template(self):
+        """预创建船模模板网格（原点，无旋转），只调用一次"""
+        # 船身
         hull = pv.Cube(center=(0, 0, 0), x_length=1.1, y_length=0.45, z_length=0.25)
-        hull.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
-        hull.translate((x, y, z))
-        hull_actor = self.plotter.add_mesh(
-            hull, color="#e8590c", pbr=True, metallic=0.15, roughness=0.35,
+        # 船舱
+        cabin = pv.Cube(center=(-0.12, 0, 0.22), x_length=0.35, y_length=0.28, z_length=0.18)
+        # 船头三角
+        bow_tip = np.array([[0.6, 0, 0.05], [0.35, 0.12, 0.05], [0.35, -0.12, 0.05]], dtype=np.float64)
+        bow = pv.PolyData(bow_tip, faces=np.array([[3, 0, 1, 2]], dtype=np.int64))
+        return hull, cabin, bow
+
+    def _update_boat_position(self, pos, heading_rad):
+        """原地更新船模位置和朝向（不重建网格，不重加Actor）"""
+        x, y, z = pos
+        heading_deg = heading_rad * 180 / math.pi
+        for actor in [self.anim_robot, self.anim_robot_cabin, self._boat_bow_actor]:
+            if actor is not None:
+                try:
+                    actor.SetPosition(x, y, z)
+                    actor.SetOrientation(0, 0, heading_deg)
+                except Exception:
+                    pass
+
+    def _add_boat_to_scene(self, pos, heading_rad):
+        """首次将船模模板添加到场景（仅在动画开始时调用一次）"""
+        x, y, z = pos
+        heading_deg = heading_rad * 180 / math.pi
+        hull_tpl, cabin_tpl, bow_tpl = self._boat_templates
+
+        # 船身
+        hull_copy = hull_tpl.copy()
+        hull_copy.rotate_z(heading_deg, point=(0, 0, 0))
+        hull_copy.translate((x, y, z))
+        self.anim_robot = self.plotter.add_mesh(
+            hull_copy, color="#e8590c", pbr=True, metallic=0.15, roughness=0.35,
             name="robot_hull", smooth_shading=True,
         )
 
-        # 船舱：驾驶舱小方块
-        cabin_offset_x = -0.12  # 船舱略偏船身后部
-        cabin = pv.Cube(center=(cabin_offset_x, 0, 0.22), x_length=0.35, y_length=0.28, z_length=0.18)
-        cabin.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
-        cabin.translate((x, y, z))
-        cabin_actor = self.plotter.add_mesh(
-            cabin, color="#ffffff", pbr=True, metallic=0.05, roughness=0.2,
+        # 船舱
+        cabin_copy = cabin_tpl.copy()
+        cabin_copy.rotate_z(heading_deg, point=(0, 0, 0))
+        cabin_copy.translate((x, y, z))
+        self.anim_robot_cabin = self.plotter.add_mesh(
+            cabin_copy, color="#ffffff", pbr=True, metallic=0.05, roughness=0.2,
             name="robot_cabin", smooth_shading=True,
         )
 
-        # 船头方向指示器（小三角形标记）
-        bow_tip = np.array([[0.6, 0, 0.05], [0.35, 0.12, 0.05], [0.35, -0.12, 0.05]], dtype=np.float64)
-        bow_face = pv.PolyData(bow_tip, faces=np.array([[3, 0, 1, 2]], dtype=np.int64))
-        bow_face.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
-        bow_face.translate((x, y, z))
-        self.plotter.add_mesh(
-            bow_face, color="#ffcc00", pbr=True, name="robot_bow",
+        # 船头三角
+        bow_copy = bow_tpl.copy()
+        bow_copy.rotate_z(heading_deg, point=(0, 0, 0))
+        bow_copy.translate((x, y, z))
+        self._boat_bow_actor = self.plotter.add_mesh(
+            bow_copy, color="#ffcc00", pbr=True, name="robot_bow",
         )
-
-        return hull_actor, cabin_actor
 
     def _remove_boat_actors(self):
         """清理船形机器人所有部件"""
@@ -886,6 +909,7 @@ class MainWindow(QMainWindow):
                 pass
         self.anim_robot = None
         self.anim_robot_cabin = None
+        self._boat_bow_actor = None
 
     # ═══════════════════ HUD 遥测 ═══════════════════
 
@@ -996,6 +1020,7 @@ class MainWindow(QMainWindow):
         self._anim_cleanup()
         self.anim_trail = []
         self.anim_frame = 0
+        self._frame_count = 0
         self.anim_playing = True
 
         # 初始化途经点追踪
@@ -1008,12 +1033,14 @@ class MainWindow(QMainWindow):
         self.total_energy_kj = energy_info["energy_consumption_kj"]
         self.battery_pct = 100.0
         total_frames = len(self.path3d) / max(0.01, self.anim_speed)
-        self.energy_per_frame = self.total_energy_kj / max(1, total_frames) * 2  # 经验系数
+        self.energy_per_frame = self.total_energy_kj / max(1, total_frames) * 2
 
-        # 创建船形机器人
+        # 预创建船模模板（只做一次）
+        self._boat_templates = self._create_boat_template()
+
+        # 首次添加船模到场景
         p0 = self.path3d[0]
         x0, y0, z0 = p0[0], p0[1], -p0[2]
-        # 初始朝向：使用路径前两个点的方向
         if len(self.path3d) >= 2:
             self.boat_heading = math.atan2(
                 self.path3d[1][1] - self.path3d[0][1],
@@ -1021,9 +1048,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self.boat_heading = 0.0
-        self.anim_robot, self.anim_robot_cabin = self._make_boat_actors(
-            (x0, y0, z0), self.boat_heading,
-        )
+        self._add_boat_to_scene((x0, y0, z0), self.boat_heading)
         self.last_boat_pos = (x0, y0, z0)
         self.boat_speed_kn = 0.0
 
@@ -1032,7 +1057,7 @@ class MainWindow(QMainWindow):
         if self.anim_timer is None:
             self.anim_timer = QTimer(self)
             self.anim_timer.timeout.connect(self._anim_tick)
-        self.anim_timer.start(60)  # 60fps 流畅
+        self.anim_timer.start(60)
         self.status_bar.showMessage("路径动画播放中... (拖拽视角可观察)")
 
     def _anim_pause(self):
@@ -1095,30 +1120,35 @@ class MainWindow(QMainWindow):
                 pass
         self.anim_robot = None
         self.anim_robot_cabin = None
+        self._boat_bow_actor = None
+        self._boat_templates = None
         self.fov_actor = None
         self.visited_waypoints = set()
         self.battery_pct = 100.0
+        self._frame_count = 0
 
     def _anim_tick(self):
         if not self.anim_playing or not self.path3d:
             return
         self.anim_frame += self.anim_speed
+        self._frame_count += 1
         idx = int(self.anim_frame)
         total = len(self.path3d)
-        # 进度显示
-        pct = min(100, int(idx / max(1, total - 1) * 100))
-        self.progress_label.setText(f"{pct}%")
+
+        # 进度显示（每10帧更新）
+        if self._frame_count % 10 == 0:
+            pct = min(100, int(idx / max(1, total - 1) * 100))
+            self.progress_label.setText(f"{pct}%")
+
         if idx >= total - 1:
             self.anim_playing = False
             if self.anim_timer:
                 self.anim_timer.stop()
             self.progress_label.setText("100% ✓")
-            # 任务完成摘要
             wp_count = len(self.visited_waypoints)
             total_wp = len(self.grid.mission_waypoints or [])
             self.status_bar.showMessage(
-                f"路径动画完成 ✓ — 途经点 {wp_count}/{total_wp} 已到达 | "
-                f"剩余电量 {self.battery_pct:.0f}% | 点击播放重放"
+                f"路径动画完成 ✓ — 途经点 {wp_count}/{total_wp} | 剩余电量 {self.battery_pct:.0f}%"
             )
             return
 
@@ -1129,88 +1159,88 @@ class MainWindow(QMainWindow):
         x = p_cur[0] + (p_nxt[0] - p_cur[0]) * frac
         y = p_cur[1] + (p_nxt[1] - p_cur[1]) * frac
         z_raw = p_cur[2] + (p_nxt[2] - p_cur[2]) * frac
-
-        # 波浪起伏效果
         wave_z = 0.06 * math.sin(x * 1.2 + self.wave_time * 3) * math.cos(y * 1.0 + self.wave_time * 2.5)
         z = -z_raw + wave_z
 
-        # ── 航向和速度 ──
+        # ── 航向（每2帧更新） ──
+        dx_f, dy_f = 1.0, 0.0
         if idx + 1 < len(self.path3d):
             dx_f = p_nxt[0] - p_cur[0]
             dy_f = p_nxt[1] - p_cur[1]
-            if abs(dx_f) > 0.001 or abs(dy_f) > 0.001:
+            if self._frame_count % 2 == 0 and (abs(dx_f) > 0.001 or abs(dy_f) > 0.001):
                 self.boat_heading = math.atan2(dy_f, dx_f)
 
-        # 速度计算 (节: 1 knot ≈ 0.514 m/s, 网格单位→米)
-        if self.last_boat_pos:
+        # 速度计算
+        if self.last_boat_pos and self._frame_count % 2 == 0:
             px, py, _ = self.last_boat_pos
             dist_m = math.sqrt((x - px)**2 + (y - py)**2) * self.grid.resolution
-            speed_ms = dist_m / (0.06 / self.anim_speed)  # 60ms per tick
-            self.boat_speed_kn = speed_ms / 0.514  # m/s → knots
+            speed_ms = dist_m / (0.12 / self.anim_speed)
+            self.boat_speed_kn = speed_ms / 0.514
         self.last_boat_pos = (x, y, z)
 
-        # ── 更新船形机器人 ──
-        self._remove_boat_actors()
-        self.anim_robot, self.anim_robot_cabin = self._make_boat_actors(
-            (x, y, z), self.boat_heading,
-        )
+        # ── 船模位置：原地更新，不重建网格（核心优化） ──
+        self._update_boat_position((x, y, z), self.boat_heading)
 
-        # ── 更新 FOV ──
-        if idx + 1 < len(self.path3d):
+        # ── FOV：每5帧更新 ──
+        if self._frame_count % 5 == 0:
             self._update_fov((x, y, -z_raw), dx_f, dy_f)
 
-        # ── 更新 HUD ──
-        depth_display = abs(z_raw) / max(1, self.grid.nz) * self.grid.depth.max()
-        self._update_hud((x, y, z), self.boat_heading, self.boat_speed_kn, depth_display)
+        # ── HUD：每15帧更新（~0.9秒间隔） ──
+        if self._frame_count % 15 == 0:
+            depth_display = abs(z_raw) / max(1, self.grid.nz) * self.grid.depth.max()
+            self._update_hud((x, y, z), self.boat_heading, self.boat_speed_kn, depth_display)
 
-        # ── 途经点到达检测 ──
-        waypoints_all = self.grid.mission_waypoints or []
-        for wi, wp in enumerate(waypoints_all):
-            if wi in self.visited_waypoints:
-                continue
-            dist_to_wp = math.sqrt(
-                (x - wp[0])**2 + (y - wp[1])**2 + (z + wp[2])**2
-            )
-            if dist_to_wp < 1.2:  # 到达阈值
-                self.visited_waypoints.add(wi)
-                self._spawn_pulse((wp[0], wp[1], -wp[2]))
-                self.arrival_log.append((wi, f"WP{wi+1}"))
-                self.status_bar.showMessage(
-                    f"到达途经点 {wi+1}/{len(waypoints_all)} — 坐标 ({wp[0]}, {wp[1]})"
-                )
-                # 到达时飘文字
-                self.plotter.add_point_labels(
-                    [[wp[0], wp[1], -wp[2] + 0.8]],
-                    [f"✓ WP{wi+1}"],
-                    font_size=14, text_color="#ffdd44", point_size=1,
-                    name=f"arrival_label_{wi}",
-                )
+        # ── 途经点到达检测（每5帧） ──
+        if self._frame_count % 5 == 0:
+            waypoints_all = self.grid.mission_waypoints or []
+            for wi, wp in enumerate(waypoints_all):
+                if wi in self.visited_waypoints:
+                    continue
+                dist_to_wp = math.sqrt((x - wp[0])**2 + (y - wp[1])**2 + (z + wp[2])**2)
+                if dist_to_wp < 1.2:
+                    self.visited_waypoints.add(wi)
+                    self._spawn_pulse((wp[0], wp[1], -wp[2]))
+                    self.status_bar.showMessage(
+                        f"到达途经点 {wi+1}/{len(waypoints_all)} — 坐标 ({wp[0]}, {wp[1]})"
+                    )
+                    self.plotter.add_point_labels(
+                        [[wp[0], wp[1], -wp[2] + 0.8]], [f"✓ WP{wi+1}"],
+                        font_size=14, text_color="#ffdd44", point_size=1,
+                        name=f"arrival_label_{wi}",
+                    )
 
-        # ── 更新脉冲特效 ──
+        # ── 脉冲特效 ──
         self._update_pulses()
 
-        # ── 电量消耗 ──
-        self.battery_pct = max(0, self.battery_pct - self.energy_per_frame / max(1, self.total_energy_kj) * 100)
-        if self.battery_pct < 15:
-            self.battery_pct = max(5, self.battery_pct)  # 不会真的归零
-        self.lbl_battery.setText(f"电量: {self.battery_pct:.0f}% {'🔴' if self.battery_pct < 25 else '🟡' if self.battery_pct < 50 else '🟢'}")
+        # ── 电量消耗（每2帧） ──
+        if self._frame_count % 2 == 0:
+            self.battery_pct = max(5, self.battery_pct - self.energy_per_frame * 2 / max(1, self.total_energy_kj) * 100)
+            self.lbl_battery.setText(f"电量: {self.battery_pct:.0f}% {'🔴' if self.battery_pct < 25 else '🟡' if self.battery_pct < 50 else '🟢'}")
 
-        # ── 尾迹 ──
-        if idx % 4 == 0:
+        # ── 尾迹：每8帧，最多40个 ──
+        if self._frame_count % 8 == 0 and len(self.anim_trail) < 40:
             wake_dot = self.plotter.add_mesh(
                 pv.Sphere(center=(x, y, z + 0.05), radius=0.08),
-                color="#88ccff", opacity=0.5, name=f"wake_{idx}",
+                color="#88ccff", opacity=0.5, name=f"wake_{self._frame_count}",
             )
             self.anim_trail.append(wake_dot)
-        # 衰减旧尾迹
-        for w in self.anim_trail:
-            try:
-                w.GetProperty().SetOpacity(max(0.05, w.GetProperty().GetOpacity() - 0.03))
-            except Exception:
-                pass
+        # 衰减尾迹（每10帧），移除最旧的
+        if self._frame_count % 10 == 0:
+            for w in self.anim_trail:
+                try:
+                    w.GetProperty().SetOpacity(max(0.05, w.GetProperty().GetOpacity() - 0.06))
+                except Exception:
+                    pass
+            # 移除透明度为0的尾迹
+            while len(self.anim_trail) > 40:
+                old = self.anim_trail.pop(0)
+                try:
+                    self.plotter.remove_actor(old)
+                except Exception:
+                    pass
 
-        # ── 路径渐显 ──
-        if idx % 8 == 0:
+        # ── 路径渐显：每30帧 ──
+        if self._frame_count % 30 == 0:
             partial = np.array([[q[0], q[1], -q[2]] for q in self.path3d[:idx + 1]], dtype=np.float64)
             if len(partial) >= 2:
                 try:
