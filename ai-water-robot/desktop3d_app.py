@@ -241,8 +241,9 @@ class MainWindow(QMainWindow):
         l2 = QGridLayout(g2)
         l2.setSpacing(6)
 
-        # 策略选择行
-        l2.addWidget(QLabel("策略:"), 0, 0)
+        # 策略选择行 — LLM启用时隐藏，由AI自动决策
+        self._strategy_label = QLabel("策略:")
+        l2.addWidget(self._strategy_label, 0, 0)
         self.strategy_combo = QComboBox()
         self.strategy_combo.addItems(["balanced — 均衡", "safe — 安全优先", "fast — 速度优先", "energy — 节能优先"])
         self.strategy_combo.setCurrentIndex(0)
@@ -251,6 +252,12 @@ class MainWindow(QMainWindow):
         self.btn_compare = QPushButton("策略对比")
         self.btn_compare.clicked.connect(self._compare_strategies)
         l2.addWidget(self.btn_compare, 0, 2)
+        self._ai_strategy_label = QLabel("AI 自动决策策略")
+        self._ai_strategy_label.setStyleSheet("font-size:13px; font-weight:bold; color:#2980b9;")
+        self._ai_strategy_label.hide()
+        l2.addWidget(self._ai_strategy_label, 0, 0, 1, 3)
+        # 保存策略相关控件引用便于显示/隐藏
+        self._manual_strategy_widgets = [self._strategy_label, self.strategy_combo, self.btn_compare]
 
         self.lbl_dist = QLabel("总距离: --"); self.lbl_dist.setStyleSheet("font-size:18px;font-weight:bold;color:#c0392b")
         self.lbl_flow = QLabel("水流代价: --"); self.lbl_flow.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5276")
@@ -1421,19 +1428,43 @@ class MainWindow(QMainWindow):
                 self.planner = TaskPlanner(self.llm_api_key, self.llm_base_url, self.llm_model)
                 self.lbl_ai.setText(f"大模型已配置: {self.llm_model}")
                 self.status_bar.showMessage(f"大模型已连接: {self.llm_model}")
+                # 同步菜单勾选状态和UI
+                self.ai_toggle_action.setChecked(True)
+                for w in self._manual_strategy_widgets:
+                    w.hide()
+                self._ai_strategy_label.show()
+                self._ai_strategy_label.setText(f"AI 自动决策 (当前: {self._strategy_cn()})")
             else:
                 self.planner = None
                 self.lbl_ai.setText("大模型未配置 — 请先设置 API Key")
+                self.ai_toggle_action.setChecked(False)
+                for w in self._manual_strategy_widgets:
+                    w.show()
+                self._ai_strategy_label.hide()
 
     def _toggle_llm(self, checked):
         self.llm_enabled = bool(checked) and bool(self.llm_api_key)
         if self.llm_enabled:
             self.planner = TaskPlanner(self.llm_api_key, self.llm_base_url, self.llm_model)
             self.lbl_ai.setText(f"智能决策已启用: {self.llm_model}")
+            # 隐藏手动策略选择，显示AI自动决策标签
+            for w in self._manual_strategy_widgets:
+                w.hide()
+            self._ai_strategy_label.show()
+            self._ai_strategy_label.setText(f"AI 自动决策 (当前: {self._strategy_cn()})")
         else:
             self.ai_toggle_action.setChecked(False)
             self.planner = None
             self.lbl_ai.setText("智能决策已禁用")
+            # 恢复手动策略选择
+            for w in self._manual_strategy_widgets:
+                w.show()
+            self._ai_strategy_label.hide()
+
+    def _strategy_cn(self):
+        """当前策略中文名"""
+        m = {"balanced": "均衡", "safe": "安全优先", "fast": "速度优先", "energy": "节能优先"}
+        return m.get(self.current_strategy, self.current_strategy)
 
     def _ai_analyze(self):
         if not self.llm_enabled or self.planner is None:
@@ -1458,12 +1489,20 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("智能分析中...")
         try:
             result = self.planner.analyze_scene(instruction, context)
+            suggested = result.get('suggested_strategy', 'balanced')
+            # 应用AI建议的策略
+            if suggested in ("balanced", "safe", "fast", "energy"):
+                self.current_strategy = suggested
+                self._ai_strategy_label.setText(f"AI 自动决策 (当前: {self._strategy_cn()})")
+                # 自动重新规划
+                if self.grid and self.grid.mission_start and (self.grid.mission_waypoints or self.grid.mission_end):
+                    self._replan()
             self.lbl_ai.setText(
                 f"{result.get('recommendation', '')}\n"
-                f"策略: {result.get('suggested_strategy', 'N/A')} | "
+                f"策略: {suggested} | "
                 f"风险: {result.get('risk_assessment', 'N/A')}"
             )
-            self.status_bar.showMessage(f"决策完成: {result.get('suggested_strategy', '')}")
+            self.status_bar.showMessage(f"AI决策完成: 策略={suggested} 已自动应用")
         except Exception as e:
             self.lbl_ai.setText(f"调用失败: {e}")
             plan = rule_based_plan(instruction)
