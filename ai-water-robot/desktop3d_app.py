@@ -28,6 +28,12 @@ from planning.astar3d import (
 from data.water_adapter import load_water_data
 from task_planner.llm_planner import TaskPlanner, rule_based_plan
 
+# ROS2桥接（可选）
+try:
+    from ros2_bridge import WaterRobotBridge, ROS2_AVAILABLE
+except ImportError:
+    ROS2_AVAILABLE = False
+
 # ── 配色 ──
 C = {
     "bg":          "#f5f6f8",
@@ -135,6 +141,11 @@ class MainWindow(QMainWindow):
         self.llm_model = os.environ.get("LLM_MODEL", "deepseek-chat")
         self.planner: TaskPlanner = None
 
+        # ROS2 桥接
+        self.ros2_enabled = False
+        self.ros2_bridge = None
+        self._ros2_poll_timer = None
+
         self._build_ui()
         self._setup_3d()
         self._init_empty()
@@ -160,6 +171,16 @@ class MainWindow(QMainWindow):
         self.ai_toggle_action.setCheckable(True)
         self.ai_toggle_action.toggled.connect(self._toggle_llm)
         ai_menu.addAction(self.ai_toggle_action)
+
+        # ROS2菜单
+        ros2_menu = mb.addMenu("通信(&C)")
+        self.ros2_toggle_action = QAction("启用 ROS2 桥接", self)
+        self.ros2_toggle_action.setCheckable(True)
+        self.ros2_toggle_action.setEnabled(ROS2_AVAILABLE)
+        if not ROS2_AVAILABLE:
+            self.ros2_toggle_action.setText("ROS2 桥接 (rclpy未安装)")
+        self.ros2_toggle_action.toggled.connect(self._toggle_ros2)
+        ros2_menu.addAction(self.ros2_toggle_action)
 
         demo_menu = mb.addMenu("演示(&M)")
         demo_menu.addAction("沿海水域", self._load_coastal)
@@ -206,6 +227,10 @@ class MainWindow(QMainWindow):
         self.chk_camera_follow.setStyleSheet("font-size:12px; font-weight:bold; color:#2c3e50;")
         self.chk_camera_follow.toggled.connect(self._toggle_camera_follow)
         tb.addWidget(self.chk_camera_follow)
+        # ROS2状态标签
+        self.lbl_ros2_status = QLabel("ROS2:关")
+        self.lbl_ros2_status.setStyleSheet("font-size:11px; font-weight:bold; color:#999; padding:0 4px;")
+        tb.addWidget(self.lbl_ros2_status)
         # 进度
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color:#2980b9; font-weight:bold; font-size:12px; padding-left:8px;")
@@ -733,6 +758,10 @@ class MainWindow(QMainWindow):
         self.lbl_energy.setText(f"能耗: {energy['energy_consumption_kj']:,.0f} kJ | 急转: {stats['sharp_turns']}次")
         self.lbl_time.setText(f"预估时间: {energy['estimated_time_min']:.1f} min | 均速: {stats['avg_speed_ms']:.1f}m/s")
         self.lbl_battery.setText(f"电池续航: 约 {energy['estimated_time_min']:.0f} min @ 100%")
+
+        # 同步路径到ROS2
+        if self.ros2_enabled and self.ros2_bridge:
+            self.ros2_bridge.update_path(self.path3d, g.resolution)
 
     def _start_waves(self):
         if self.wave_timer is not None:
@@ -1311,6 +1340,131 @@ class MainWindow(QMainWindow):
     def _toggle_camera_follow(self, checked):
         self.camera_follow = bool(checked)
 
+    # ═══════════════════ ROS2 桥接 ═══════════════════
+
+    def _toggle_ros2(self, checked):
+        """启用/禁用 ROS2 桥接"""
+        if checked and ROS2_AVAILABLE:
+            try:
+                self.ros2_bridge = WaterRobotBridge("water_robot_bridge")
+                self.ros2_bridge.start()
+                self.ros2_enabled = True
+                self.lbl_ros2_status.setText("ROS2:开")
+                self.lbl_ros2_status.setStyleSheet(
+                    "font-size:11px; font-weight:bold; color:#27ae60; padding:0 4px;")
+                # 启动轮询定时器 (5Hz检查ROS2指令)
+                self._ros2_poll_timer = QTimer(self)
+                self._ros2_poll_timer.timeout.connect(self._poll_ros2_commands)
+                self._ros2_poll_timer.start(200)
+                # 发布初始状态
+                self._sync_to_ros2()
+                self.status_bar.showMessage("ROS2 桥接已启动 — /water_robot/* topics可订阅")
+            except Exception as e:
+                self.ros2_toggle_action.setChecked(False)
+                QMessageBox.warning(self, "ROS2启动失败", str(e))
+        else:
+            if self.ros2_bridge:
+                self.ros2_bridge.stop()
+            self.ros2_enabled = False
+            self.ros2_bridge = None
+            if self._ros2_poll_timer:
+                self._ros2_poll_timer.stop()
+                self._ros2_poll_timer = None
+            self.lbl_ros2_status.setText("ROS2:关")
+            self.lbl_ros2_status.setStyleSheet(
+                "font-size:11px; font-weight:bold; color:#999; padding:0 4px;")
+            self.status_bar.showMessage("ROS2 桥接已关闭")
+
+    def _sync_to_ros2(self):
+        """同步当前状态到ROS2"""
+        if not self.ros2_enabled or not self.ros2_bridge:
+            return
+        g = self.grid
+        bridge = self.ros2_bridge
+
+        # 路径
+        if self.path3d:
+            bridge.update_path(self.path3d, g.resolution if g else 50.0)
+
+        # 水况
+        if g:
+            cx, cy = g.nx // 2, g.ny // 2
+            bridge.update_water_sensor(
+                depth_m=g.depth[cy, cx] if g.depth[cy, cx] > 0 else 0,
+                temp_c=g.temperature[cy, cx] if g.depth[cy, cx] > 0 else 15.0,
+                vis_m=g.visibility[cy, cx] if g.depth[cy, cx] > 0 else 10.0,
+                pressure_kpa=g.pressure[0, cy, cx],
+            )
+
+        bridge.update_status(self.status_bar.currentMessage() or "就绪")
+
+    def _poll_ros2_commands(self):
+        """轮询ROS2指令（每200ms由定时器触发）"""
+        if not self.ros2_enabled or not self.ros2_bridge:
+            return
+        cmds = self.ros2_bridge.poll_commands()
+        if not cmds:
+            return
+
+        g = self.grid
+        if not g:
+            return
+
+        needs_redraw = False
+
+        # 设置起点
+        if cmds.get("start"):
+            sx, sy, sz = cmds["start"]
+            if 0 <= sx < g.nx and 0 <= sy < g.ny and 0 <= sz < g.nz:
+                self._push_undo()
+                g.mission_start = (sx, sy, sz)
+                needs_redraw = True
+                self.status_bar.showMessage(f"ROS2: 起点已设置 ({sx},{sy},{sz})")
+
+        # 添加途经点
+        for wp in cmds.get("waypoints", []):
+            wx, wy, wz = wp
+            if 0 <= wx < g.nx and 0 <= wy < g.ny and 0 <= wz < g.nz:
+                self._push_undo()
+                g.mission_waypoints.append((wx, wy, wz))
+                needs_redraw = True
+
+        # 设置终点
+        if cmds.get("goal"):
+            gx, gy, gz = cmds["goal"]
+            if 0 <= gx < g.nx and 0 <= gy < g.ny and 0 <= gz < g.nz:
+                self._push_undo()
+                g.mission_end = (gx, gy, gz)
+                needs_redraw = True
+                self.status_bar.showMessage(f"ROS2: 终点已设置 ({gx},{gy},{gz})")
+
+        # 切换策略
+        strat = cmds.get("strategy")
+        if strat and strat in ("balanced", "safe", "fast", "energy"):
+            self.current_strategy = strat
+            strategy_map = {"balanced": 0, "safe": 1, "fast": 2, "energy": 3}
+            self.strategy_combo.setCurrentIndex(strategy_map.get(strat, 0))
+            needs_redraw = True
+
+        # 启动/停止动画
+        if cmds.get("start_mission") is True:
+            if not self.anim_playing and self.path3d:
+                self._anim_play()
+        elif cmds.get("start_mission") is False:
+            if self.anim_playing:
+                self._anim_stop()
+
+        # 重置
+        if cmds.get("clear_all"):
+            self._clear_all()
+
+        if needs_redraw:
+            self.plotter.clear()
+            self._draw()
+            self._refresh_info()
+            self._refresh_wp_list()
+            self._sync_to_ros2()
+
     def _anim_cleanup(self):
         self.anim_frame = 0
         # 清理船形机器人
@@ -1485,6 +1639,22 @@ class MainWindow(QMainWindow):
                     self.plotter.remove_actor(old)
                 except Exception:
                     pass
+
+        # ── ROS2同步：每10帧发布机器人状态 ──
+        if self.ros2_enabled and self.ros2_bridge and self._frame_count % 10 == 0:
+            self.ros2_bridge.update_robot_state(x, y, z, self.boat_heading, self.boat_speed_kn)
+            self.ros2_bridge.update_battery(self.battery_pct)
+            g = self.grid
+            if g:
+                ix, iy = int(x), int(y)
+                ix = max(0, min(ix, g.nx - 1))
+                iy = max(0, min(iy, g.ny - 1))
+                self.ros2_bridge.update_water_sensor(
+                    depth_m=g.depth[iy, ix] if g.depth[iy, ix] > 0 else 0,
+                    temp_c=g.temperature[iy, ix] if g.depth[iy, ix] > 0 else 15.0,
+                    vis_m=g.visibility[iy, ix] if g.depth[iy, ix] > 0 else 10.0,
+                    pressure_kpa=g.pressure[min(int(abs(z_raw) / max(1, g.nz) * g.nz), g.nz-1), iy, ix],
+                )
 
         # ── 路径渐显：每30帧 ──
         if self._frame_count % 30 == 0:
@@ -1844,6 +2014,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.wave_timer:
             self.wave_timer.stop()
+        if self.anim_timer:
+            self.anim_timer.stop()
+        if self._ros2_poll_timer:
+            self._ros2_poll_timer.stop()
+        if self.ros2_bridge:
+            self.ros2_bridge.stop()
         super().closeEvent(event)
 
 
