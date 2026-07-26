@@ -20,8 +20,11 @@ from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QKeySequence
 from pyvistaqt import QtInteractor
 import pyvista as pv
 
-from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river
-from planning.astar3d import plan_tsp_3d, compute_3d_path_cost
+from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river, demo_3d_harbor
+from planning.astar3d import (
+    plan_tsp_3d, compute_3d_path_cost, compute_energy_estimate,
+    compare_strategies, compare_and_select_best, STRATEGY_WEIGHTS,
+)
 from data.water_adapter import load_water_data
 from task_planner.llm_planner import TaskPlanner, rule_based_plan
 
@@ -91,9 +94,32 @@ class MainWindow(QMainWindow):
         self.anim_frame = 0
         self.anim_playing = False
         self.anim_speed = 1.0
-        self.anim_robot = None
+        self.anim_robot = None       # 船身主体 actor
+        self.anim_robot_cabin = None # 船舱 actor
         self.fov_actor = None
         self.sensor_actor = None
+        self.boat_heading = 0.0      # 船头朝向（弧度）
+        self.boat_speed_kn = 0.0     # 当前航速（节）
+        self.last_boat_pos = None    # 上帧位置（用于速度计算）
+
+        # HUD 文字
+        self.hud_texts = []
+
+        # 途经点到达特效
+        self.pulse_rings = []        # [(actor, remaining_frames)]
+        self.visited_waypoints = set()  # 已到达途经点索引
+        self.arrival_log = []        # 到达日志 [(index, time_str)]
+
+        # 电量/能耗
+        self.battery_pct = 100.0     # 剩余电量百分比
+        self.total_energy_kj = 0     # 路径总能耗
+        self.energy_per_frame = 0    # 每帧能耗
+
+        # 罗盘
+        self.compass_actors = []
+
+        # 当前策略
+        self.current_strategy = "balanced"
 
         # 撤销
         self._undo_stack = []
@@ -131,9 +157,10 @@ class MainWindow(QMainWindow):
         self.ai_toggle_action.toggled.connect(self._toggle_llm)
         ai_menu.addAction(self.ai_toggle_action)
 
-        demo_menu = mb.addMenu("演示(&D)")
+        demo_menu = mb.addMenu("演示(&M)")
         demo_menu.addAction("沿海水域", self._load_coastal)
         demo_menu.addAction("内河航道", self._load_river)
+        demo_menu.addAction("港口码头", self._load_harbor)
 
         view_menu = mb.addMenu("视图(&V)")
         view_menu.addAction("重置视角", self._reset_view, "R")
@@ -150,21 +177,38 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addWidget(self._btn("沿海 Demo", self._load_coastal))
         tb.addWidget(self._btn("河道 Demo", self._load_river))
+        tb.addWidget(self._btn("港口 Demo", self._load_harbor))
         tb.addSeparator()
         tb.addWidget(self._btn("重新规划", self._replan, primary=True))
         tb.addSeparator()
-        tb.addWidget(self._btn("播放", self._anim_play))
+        tb.addWidget(self._btn("播放", self._anim_play, primary=True))
         tb.addWidget(self._btn("暂停", self._anim_pause))
         tb.addWidget(self._btn("停止", self._anim_stop))
+        # 动画速度
+        self.speed_label = QLabel(" 速度:")
+        self.speed_label.setStyleSheet("color:#2c3e50; font-weight:bold; font-size:12px;")
+        tb.addWidget(self.speed_label)
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["0.5x", "1x", "2x", "4x"])
+        self.speed_combo.setCurrentIndex(1)
+        self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
+        self.speed_combo.setFixedWidth(65)
+        self.speed_combo.setStyleSheet("font-size:12px; padding:2px 4px;")
+        tb.addWidget(self.speed_combo)
+        # 进度
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color:#2980b9; font-weight:bold; font-size:12px; padding-left:8px;")
+        tb.addWidget(self.progress_label)
         tb.addSeparator()
         tb.addWidget(self._btn("撤销", self._undo))
-        tb.addWidget(self._btn("清除途经点", self._clear_wp, danger=True))
-        tb.addWidget(self._btn("清除障碍物", self._clear_obs, danger=True))
+        tb.addWidget(self._btn("清除途经点", self._clear_wp))
+        tb.addWidget(self._btn("清除障碍物", self._clear_obs))
+        tb.addWidget(self._btn("重置场景", self._clear_all, danger=True))
 
         # 状态栏
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("就绪 — 使用 Ctrl+点击放置障碍物, Shift+点击添加途经点")
+        self.status_bar.showMessage("就绪 — 右键设置起点, Shift+右键设终点, Ctrl+右键放障碍物")
 
         # 右侧面板
         dock = QDockWidget("控制面板", self)
@@ -192,12 +236,31 @@ class MainWindow(QMainWindow):
         # 结果
         g2 = QGroupBox("路径规划结果")
         l2 = QGridLayout(g2)
+        l2.setSpacing(6)
+
+        # 策略选择行
+        l2.addWidget(QLabel("策略:"), 0, 0)
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.addItems(["balanced — 均衡", "safe — 安全优先", "fast — 速度优先", "energy — 节能优先"])
+        self.strategy_combo.setCurrentIndex(0)
+        self.strategy_combo.currentTextChanged.connect(self._on_strategy_changed)
+        l2.addWidget(self.strategy_combo, 0, 1)
+        self.btn_compare = QPushButton("策略对比")
+        self.btn_compare.clicked.connect(self._compare_strategies)
+        l2.addWidget(self.btn_compare, 0, 2)
+
         self.lbl_dist = QLabel("总距离: --"); self.lbl_dist.setStyleSheet("font-size:18px;font-weight:bold;color:#c0392b")
         self.lbl_flow = QLabel("水流代价: --"); self.lbl_flow.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5276")
         self.lbl_depth = QLabel("深度代价: --"); self.lbl_depth.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5c2a")
-        l2.addWidget(self.lbl_dist, 0, 0)
-        l2.addWidget(self.lbl_flow, 1, 0)
-        l2.addWidget(self.lbl_depth, 2, 0)
+        self.lbl_energy = QLabel("能耗: --"); self.lbl_energy.setStyleSheet("font-size:15px;font-weight:bold;color:#d35400")
+        self.lbl_time = QLabel("预估时间: --"); self.lbl_time.setStyleSheet("font-size:15px;font-weight:bold;color:#1a5c2a")
+        self.lbl_battery = QLabel("电量: --"); self.lbl_battery.setStyleSheet("font-size:15px;font-weight:bold;color:#2980b9")
+        l2.addWidget(self.lbl_dist, 1, 0, 1, 3)
+        l2.addWidget(self.lbl_flow, 2, 0, 1, 3)
+        l2.addWidget(self.lbl_depth, 3, 0, 1, 3)
+        l2.addWidget(self.lbl_energy, 4, 0, 1, 3)
+        l2.addWidget(self.lbl_time, 5, 0, 1, 3)
+        l2.addWidget(self.lbl_battery, 6, 0, 1, 3)
         lay.addWidget(g2)
 
         # 智能决策
@@ -223,18 +286,34 @@ class MainWindow(QMainWindow):
         l3.addWidget(self.lbl_ai)
         lay.addWidget(g3)
 
-        # 操作提示
-        g4 = QGroupBox("操作提示")
+        # 深度选择
+        g4 = QGroupBox("放置深度")
         l4 = QVBoxLayout(g4)
+        h_depth = QHBoxLayout()
+        h_depth.addWidget(QLabel("目标深度层:"))
+        self.depth_combo = QComboBox()
+        self.depth_combo.addItems([f"表层 (z=0)" if i == 0 else f"z={i}" for i in range(8)])
+        self.depth_combo.setCurrentIndex(0)
+        h_depth.addWidget(self.depth_combo)
+        l4.addLayout(h_depth)
+        self.lbl_depth_hint = QLabel("右键/Shift+右键/Ctrl+右键 均使用此深度")
+        self.lbl_depth_hint.setStyleSheet("color:#5a6a7a; font-size:11px;")
+        l4.addWidget(self.lbl_depth_hint)
+        lay.addWidget(g4)
+
+        # 操作提示
+        g5 = QGroupBox("操作提示")
+        l5 = QVBoxLayout(g5)
         tips = QLabel(
             "左键拖拽 = 旋转 | Shift+左键 = 平移\n"
-            "右键点击 = 添加途经点\n"
-            "Ctrl + 右键点击 = 放置/移除障碍物\n"
+            "右键点击 = 设起点 / 添加途经点\n"
+            "Shift+右键 = 设置终点\n"
+            "Ctrl+右键 = 放置/移除障碍物\n"
             "滚轮 = 缩放 | 中键 = 旋转"
         )
         tips.setStyleSheet("color:#5a6a7a; font-size:12px;")
-        l4.addWidget(tips)
-        lay.addWidget(g4)
+        l5.addWidget(tips)
+        lay.addWidget(g5)
 
         lay.addStretch()
         return w
@@ -269,6 +348,12 @@ class MainWindow(QMainWindow):
             self.ctrl_held = True
         elif key in ("Shift_L", "Shift_R"):
             self.shift_held = True
+        elif key == "space":
+            # 空格切换播放/暂停
+            if self.anim_playing:
+                self._anim_pause()
+            elif self.path3d:
+                self._anim_play()
 
     def _on_key_up(self, obj, event):
         key = obj.GetKeySym()
@@ -278,7 +363,7 @@ class MainWindow(QMainWindow):
             self.shift_held = False
 
     def _on_click(self, position):
-        """右键点击: 添加途经点 或 Ctrl+右键: 切换障碍物"""
+        """右键交互: 首次=设起点, 后续=途经点, Shift+右键=终点, Ctrl+右键=障碍物"""
         if self.grid is None or position is None:
             return
         try:
@@ -287,22 +372,37 @@ class MainWindow(QMainWindow):
             return
         if not (0 <= x < self.grid.nx and 0 <= y < self.grid.ny):
             return
-        # 获取当前视角下的深度层（默认表面 z=0）
-        z = 0
+        # 从面板读取当前深度层
+        z = self.depth_combo.currentIndex()
+        z = max(0, min(z, self.grid.nz - 1))
         self._push_undo()
         if self.ctrl_held:
+            # Ctrl+右键: 切换障碍物
             self.grid.obstacles[z, y, x] = not self.grid.obstacles[z, y, x]
+            action = f"障碍物 {'放置' if self.grid.obstacles[z, y, x] else '移除'} ({x}, {y})"
+        elif self.shift_held:
+            # Shift+右键: 设置终点
+            self.grid.mission_end = (x, y, z)
+            action = f"终点已设置 ({x}, {y})"
+        elif self.grid.mission_start is None:
+            # 首次右键（无起点时）: 设置起点
+            self.grid.mission_start = (x, y, z)
+            action = f"起点已设置 ({x}, {y})"
         else:
+            # 普通右键: 添加途经点
             self.grid.mission_waypoints.append((x, y, z))
+            action = f"途经点已添加 ({x}, {y}) — 共 {len(self.grid.mission_waypoints)} 个"
         self.plotter.clear()
         self._draw()
         self._refresh_info()
+        self.status_bar.showMessage(action)
 
     # ═══════════════════ 数据加载 ═══════════════════
 
     def load(self, grid):
         self.grid = grid
         self.path3d = None
+        self.path_actor = None
         self.wave_time = 0.0
         self.plotter.clear()
         self._draw()
@@ -361,6 +461,8 @@ class MainWindow(QMainWindow):
         self.load(demo_3d_coastal())
     def _load_river(self):
         self.load(demo_3d_river())
+    def _load_harbor(self):
+        self.load(demo_3d_harbor())
 
     # ═══════════════════ 渲染 ═══════════════════
 
@@ -375,7 +477,18 @@ class MainWindow(QMainWindow):
                 if g.depth[y, x] > 0:
                     dv[y, x] = -(g.depth[y, x] / max(1, g.depth.max())) * nz * 0.8
         gx, gy = np.meshgrid(range(nx), range(ny))
-        self.plotter.add_mesh(pv.StructuredGrid(gx, gy, dv), color="#889966", opacity=0.45, name="seabed", show_edges=False)
+        seabed = pv.StructuredGrid(gx, gy, dv)
+        self.plotter.add_mesh(seabed, color="#889966", opacity=0.45, name="seabed", show_edges=False)
+
+        # 海底等深线（每隔一定深度绘制轮廓线）
+        try:
+            contours = seabed.contour()
+            if contours.n_points > 0:
+                self.plotter.add_mesh(
+                    contours, color="#445533", opacity=0.5, line_width=1.5, name="depth_contours",
+                )
+        except Exception:
+            pass  # 轮廓提取失败时静默跳过
 
         # 障碍物
         for z in range(nz):
@@ -387,19 +500,55 @@ class MainWindow(QMainWindow):
                             color=C["danger"], opacity=0.88, name=f"o.{x}.{y}.{z}",
                         )
 
-        # 水流
+        # 水流（使用合成水流 = 基础流 + 漩涡 + 风生流）
         step = max(1, min(nx, ny) // 10)
         for y in range(0, ny, step):
             for x in range(0, nx, step):
                 if g.depth[y, x] <= 0:
                     continue
-                (dx, dy, _), sp = g.get_current_at(x, y, 0)
+                (dx, dy, _), sp = g.get_total_current_at(x, y, 0)
                 if sp > 0.01:
                     self.plotter.add_mesh(
                         pv.Arrow(start=(x, y, 0.3), direction=(dx * sp * 3, dy * sp * 3, 0),
                                   tip_length=0.25, tip_radius=0.08, shaft_radius=0.03),
                         color=C["accent"], opacity=0.5,
                     )
+
+        # 漩涡可视化 (螺旋环)
+        for cx, cy, radius, strength in g.eddies:
+            # 漩涡中心标记
+            self.plotter.add_mesh(
+                pv.Sphere(center=(cx, cy, 0.1), radius=0.3),
+                color="#9933cc", opacity=0.6, name=f"eddy_c_{cx}_{cy}",
+            )
+            # 漩涡环 (用多个箭头标示旋转方向)
+            n_arrows = 12
+            for i in range(n_arrows):
+                angle = 2 * math.pi * i / n_arrows
+                ax, ay = cx + math.cos(angle) * radius * 0.7, cy + math.sin(angle) * radius * 0.7
+                # 切向方向
+                tx, ty = -math.sin(angle), math.cos(angle)
+                if g.depth[min(int(ay), ny - 1), min(int(ax), nx - 1)] > 0:
+                    self.plotter.add_mesh(
+                        pv.Arrow(start=(ax, ay, 0.15), direction=(tx * 0.6, ty * 0.6, 0),
+                                  tip_length=0.2, tip_radius=0.05, shaft_radius=0.02),
+                        color="#aa66dd", opacity=0.4,
+                    )
+
+        # 天气指示 (风向标)
+        wind_dir, wind_spd, wave_h = g.get_weather_at(nx // 2, ny // 2)
+        if wind_spd > 0.1:
+            wx, wy = nx - 3, ny - 2
+            self.plotter.add_mesh(
+                pv.Arrow(start=(wx, wy, 0.8), direction=(wind_dir[0] * 2, wind_dir[1] * 2, 0),
+                          tip_length=0.5, tip_radius=0.12, shaft_radius=0.06),
+                color="#ffc107", opacity=0.7, name="wind",
+            )
+            self.plotter.add_point_labels(
+                [[wx, wy, 0.8]],
+                [f"风向 {wind_spd:.0f}m/s 浪{wave_h:.1f}m"],
+                font_size=10, text_color="#ffc107", point_size=1,
+            )
 
         # 任务点
         if g.mission_start:
@@ -414,17 +563,27 @@ class MainWindow(QMainWindow):
             e = g.mission_end
             be = pv.Sphere(center=(e[0], e[1], -e[2]), radius=0.5)
             self.plotter.add_mesh(be, color=C["end"], pbr=True, name="end")
+            self.plotter.add_point_labels([be.center], ["终点"], font_size=13, text_color=C["end"], point_size=1)
 
         # 路径
         if g.mission_start and g.mission_waypoints:
             self._plan()
 
+        # 罗盘
+        self._add_compass()
+
     def _plan(self):
         g = self.grid
         if not (g and g.mission_start and g.mission_waypoints):
             return
-        self.path3d = plan_tsp_3d(g, g.mission_start, g.mission_waypoints, g.mission_end)
+        self.path3d = plan_tsp_3d(g, g.mission_start, g.mission_waypoints, g.mission_end,
+                                  strategy=self.current_strategy)
         if self.path3d is None:
+            self.lbl_dist.setText("总距离: 无可行路径")
+            self.lbl_flow.setText("水流代价: --")
+            self.lbl_depth.setText("深度代价: --")
+            self.lbl_energy.setText("能耗: --")
+            self.lbl_time.setText("预估时间: --")
             return
         if self.path_actor:
             self.plotter.remove_actor(self.path_actor)
@@ -433,9 +592,16 @@ class MainWindow(QMainWindow):
             tube = pv.Spline(pts, n_points=len(pts) * 3).tube(radius=0.12)
             self.path_actor = self.plotter.add_mesh(tube, color=C["path"], pbr=True, metallic=0.1, name="path")
         d, f, dc = compute_3d_path_cost(g, self.path3d)
-        self.lbl_dist.setText(f"总距离: {d:,.0f} m")
+        energy = compute_energy_estimate(g, self.path3d)
+        # 策略中文名
+        strategy_names = {"balanced": "均衡", "safe": "安全", "fast": "快速", "energy": "节能"}
+        sn = strategy_names.get(self.current_strategy, self.current_strategy)
+        self.lbl_dist.setText(f"总距离: {d:,.0f} m [{sn}]")
         self.lbl_flow.setText(f"水流代价: {f:,.0f}")
         self.lbl_depth.setText(f"深度代价: {dc:,.0f}")
+        self.lbl_energy.setText(f"能耗: {energy['energy_consumption_kj']:,.0f} kJ")
+        self.lbl_time.setText(f"预估时间: {energy['estimated_time_min']:.1f} min")
+        self.lbl_battery.setText(f"电池续航: 约 {energy['estimated_time_min']:.0f} min @ 100%")
 
     def _start_waves(self):
         if self.wave_timer is not None:
@@ -461,7 +627,54 @@ class MainWindow(QMainWindow):
 
     def _replan(self):
         if self.grid:
-            self._plan()
+            self.path_actor = None  # 清空旧引用，避免 _plan 中移除已清理的 actor
+            self.plotter.clear()
+            self._draw()
+
+    def _on_strategy_changed(self, text):
+        """策略下拉框切换时自动重新规划"""
+        strategy_map = {
+            "balanced — 均衡": "balanced",
+            "safe — 安全优先": "safe",
+            "fast — 速度优先": "fast",
+            "energy — 节能优先": "energy",
+        }
+        self.current_strategy = strategy_map.get(text, "balanced")
+        if self.grid and self.grid.mission_start and self.grid.mission_waypoints:
+            self._replan()
+            self.status_bar.showMessage(f"策略已切换: {text}")
+
+    def _compare_strategies(self):
+        """多策略对比弹窗"""
+        g = self.grid
+        if not (g and g.mission_start and g.mission_waypoints):
+            QMessageBox.warning(self, "无法对比", "请先加载数据并设置起点和途经点")
+            return
+        self.status_bar.showMessage("正在对比四种策略...")
+        results = compare_strategies(g, g.mission_start, g.mission_waypoints, g.mission_end)
+        # 构建对比报告
+        lines = ["═══ 策略对比结果 ═══", ""]
+        strategy_names = {"balanced": "均衡", "safe": "安全优先", "fast": "速度优先", "energy": "节能优先"}
+        best_dist = min((r["distance"] for r in results.values() if r), default=0)
+        best_energy = min((r["energy_kj"] for r in results.values() if r), default=0)
+        for key, r in results.items():
+            name = strategy_names.get(key, key)
+            if r is None:
+                lines.append(f"  {name}: 无可行路径")
+                continue
+            dist_mark = " ★最短" if r["distance"] == best_dist else ""
+            energy_mark = " ★最省" if r["energy_kj"] == best_energy else ""
+            lines.append(
+                f"  {name}: 距离 {r['distance']:,.0f}m{dist_mark} | "
+                f"能耗 {r['energy_kj']:,.0f}kJ{energy_mark} | "
+                f"时间 {r['time_min']:.1f}min"
+            )
+        lines.append("")
+        lines.append("提示: 在控制面板下拉框中切换策略可查看对应路径")
+        msg = "\n".join(lines)
+        # 在 AI 面板中显示对比结果
+        self.lbl_ai.setText(msg)
+        self.status_bar.showMessage("策略对比完成 — 结果已显示在智能决策面板")
 
     def _clear_wp(self):
         if self.grid:
@@ -477,8 +690,172 @@ class MainWindow(QMainWindow):
             self.plotter.clear()
             self._draw()
 
+    def _clear_all(self):
+        """重置整个场景：清除所有任务点 (起点/途经点/终点) 和障碍物"""
+        if self.grid:
+            self._push_undo()
+            self.grid.mission_start = None
+            self.grid.mission_waypoints = []
+            self.grid.mission_end = None
+            self.grid.obstacles[:] = False
+            self.path3d = None
+            self.path_actor = None
+            self.plotter.clear()
+            self._draw()
+            self._refresh_info()
+            # 停止动画
+            self._anim_stop()
+            self.status_bar.showMessage("场景已重置 — 右键设置起点开始规划")
+
     def _reset_view(self):
         self.plotter.reset_camera()
+
+    # ═══════════════════ 船形机器人模型 ═══════════════════
+
+    def _make_boat_actors(self, pos, heading_rad):
+        """创建船形机器人（船身+船舱），返回 (hull_actor, cabin_actor)
+
+        船头方向为 +x，heading_rad 从 +x 轴逆时针旋转
+        """
+        x, y, z = pos
+        # 船身：拉伸的六面体 — 模拟 V 型船体
+        hull = pv.Cube(center=(0, 0, 0), x_length=1.1, y_length=0.45, z_length=0.25)
+        hull.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
+        hull.translate((x, y, z))
+        hull_actor = self.plotter.add_mesh(
+            hull, color="#e8590c", pbr=True, metallic=0.15, roughness=0.35,
+            name="robot_hull", smooth_shading=True,
+        )
+
+        # 船舱：驾驶舱小方块
+        cabin_offset_x = -0.12  # 船舱略偏船身后部
+        cabin = pv.Cube(center=(cabin_offset_x, 0, 0.22), x_length=0.35, y_length=0.28, z_length=0.18)
+        cabin.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
+        cabin.translate((x, y, z))
+        cabin_actor = self.plotter.add_mesh(
+            cabin, color="#ffffff", pbr=True, metallic=0.05, roughness=0.2,
+            name="robot_cabin", smooth_shading=True,
+        )
+
+        # 船头方向指示器（小三角形标记）
+        bow_tip = np.array([[0.6, 0, 0.05], [0.35, 0.12, 0.05], [0.35, -0.12, 0.05]], dtype=np.float64)
+        bow_face = pv.PolyData(bow_tip, faces=np.array([[3, 0, 1, 2]], dtype=np.int64))
+        bow_face.rotate_z(heading_rad * 180 / math.pi, point=(0, 0, 0))
+        bow_face.translate((x, y, z))
+        self.plotter.add_mesh(
+            bow_face, color="#ffcc00", pbr=True, name="robot_bow",
+        )
+
+        return hull_actor, cabin_actor
+
+    def _remove_boat_actors(self):
+        """清理船形机器人所有部件"""
+        for name in ["robot_hull", "robot_cabin", "robot_bow"]:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+        self.anim_robot = None
+        self.anim_robot_cabin = None
+
+    # ═══════════════════ HUD 遥测 ═══════════════════
+
+    def _update_hud(self, pos, heading_rad, speed_kn, depth_m):
+        """更新 3D 场景中的 HUD 遥测文字叠加"""
+        # 移除旧 HUD
+        for t in self.hud_texts:
+            try:
+                self.plotter.remove_actor(t)
+            except Exception:
+                pass
+        self.hud_texts = []
+
+        heading_deg = heading_rad * 180 / math.pi
+        heading_deg = heading_deg % 360
+
+        g = self.grid
+        depth_actual = abs(pos[2]) / max(1, g.nz) * g.depth.max() if g else abs(pos[2])
+
+        battery_color = "#ff4444" if self.battery_pct < 25 else ("#ffcc00" if self.battery_pct < 50 else "#00ff88")
+
+        hud_lines = [
+            f"航速 {speed_kn:.1f} kn  |  深度 {depth_actual:.1f} m  |  航向 {heading_deg:.0f}°",
+            f"坐标 ({pos[0]:.1f}, {pos[1]:.1f})  |  电量 {self.battery_pct:.0f}%",
+        ]
+
+        # 上半部分 — 白色遥测
+        t1 = self.plotter.add_text(
+            hud_lines[0], position="upper_left", font_size=11, color="#ffffff",
+            name="hud_telemetry",
+        )
+        self.hud_texts.append(t1)
+
+        # 下半部分用不同颜色显示电量和坐标
+        if self.battery_pct < 25:
+            batt_text = f"坐标 ({pos[0]:.1f}, {pos[1]:.1f})  |  ⚡电量 {self.battery_pct:.0f}% — 低电量警告!"
+        else:
+            batt_text = hud_lines[1]
+        t2 = self.plotter.add_text(
+            batt_text, position="upper_right", font_size=10, color=battery_color,
+            name="hud_battery",
+        )
+        self.hud_texts.append(t2)
+
+    # ═══════════════════ 途经点到达特效 ═══════════════════
+
+    def _spawn_pulse(self, pos):
+        """在指定位置生成脉冲扩散环"""
+        x, y, z = pos
+        ring = pv.Disc(center=(x, y, z), inner=0.25, outer=0.35, normal=(0, 0, 1),
+                        r_res=32, c_res=8)
+        actor = self.plotter.add_mesh(
+            ring, color="#ffdd44", opacity=0.9, name=f"pulse_{len(self.pulse_rings)}",
+        )
+        self.pulse_rings.append([actor, 30])  # 30帧 ≈ 0.5秒
+
+    def _update_pulses(self):
+        """更新所有脉冲环（扩展+淡出）"""
+        surviving = []
+        for actor, remaining in self.pulse_rings:
+            remaining -= 1
+            if remaining <= 0:
+                try:
+                    self.plotter.remove_actor(actor)
+                except Exception:
+                    pass
+                continue
+            # 扩展环
+            try:
+                prop = actor.GetProperty()
+                scale = 1.0 + (30 - remaining) * 0.15
+                actor.SetScale(scale, scale, scale)
+                prop.SetOpacity(max(0.05, remaining / 30 * 0.8))
+            except Exception:
+                pass
+            surviving.append([actor, remaining])
+        self.pulse_rings = surviving
+
+    # ═══════════════════ 罗盘 ═══════════════════
+
+    def _add_compass(self):
+        """在场景中放置 3D 罗盘（指北针）"""
+        g = self.grid
+        cx, cy = g.nx - 2.5, g.ny - 1.5
+        # N 方向箭头
+        self.plotter.add_mesh(
+            pv.Arrow(start=(cx, cy, 0.8), direction=(0, 1.2, 0),
+                      tip_length=0.4, tip_radius=0.18, shaft_radius=0.08),
+            color="#e74c3c", name="compass_n",
+        )
+        self.plotter.add_mesh(
+            pv.Arrow(start=(cx, cy, 0.8), direction=(0, -0.6, 0),
+                      tip_length=0.25, tip_radius=0.12, shaft_radius=0.06),
+            color="#aaaaaa", name="compass_s",
+        )
+        self.plotter.add_point_labels(
+            [[cx, cy + 1.8, 0.8]], ["N"],
+            font_size=14, text_color="#e74c3c", point_size=1, name="compass_label",
+        )
 
     # ═══════════════════ 动画 ═══════════════════
 
@@ -486,19 +863,43 @@ class MainWindow(QMainWindow):
         if not self.path3d or len(self.path3d) < 2:
             self.status_bar.showMessage("请先加载数据并规划路径")
             return
-        # 清理旧动画
+        # 清理旧动画（包括上次残留的尾迹）
         self._anim_cleanup()
+        self.anim_trail = []
         self.anim_frame = 0
         self.anim_playing = True
-        self.anim_trail = []
-        # 创建动画机器人（小船形状）
+
+        # 初始化途经点追踪
+        self.visited_waypoints = set()
+        self.arrival_log = []
+
+        # 计算能耗预算
+        g = self.grid
+        energy_info = compute_energy_estimate(g, self.path3d)
+        self.total_energy_kj = energy_info["energy_consumption_kj"]
+        self.battery_pct = 100.0
+        total_frames = len(self.path3d) / max(0.01, self.anim_speed)
+        self.energy_per_frame = self.total_energy_kj / max(1, total_frames) * 2  # 经验系数
+
+        # 创建船形机器人
         p0 = self.path3d[0]
         x0, y0, z0 = p0[0], p0[1], -p0[2]
-        self.anim_robot = self.plotter.add_mesh(
-            self.pv.Sphere(center=(x0, y0, z0), radius=0.45),
-            color="#ff4400", pbr=True, metallic=0.2, roughness=0.3, name="robot",
+        # 初始朝向：使用路径前两个点的方向
+        if len(self.path3d) >= 2:
+            self.boat_heading = math.atan2(
+                self.path3d[1][1] - self.path3d[0][1],
+                self.path3d[1][0] - self.path3d[0][0],
+            )
+        else:
+            self.boat_heading = 0.0
+        self.anim_robot, self.anim_robot_cabin = self._make_boat_actors(
+            (x0, y0, z0), self.boat_heading,
         )
+        self.last_boat_pos = (x0, y0, z0)
+        self.boat_speed_kn = 0.0
+
         self._show_fov()
+        self._update_hud((x0, y0, z0), self.boat_heading, 0.0, abs(z0))
         if self.anim_timer is None:
             self.anim_timer = QTimer(self)
             self.anim_timer.timeout.connect(self._anim_tick)
@@ -516,31 +917,83 @@ class MainWindow(QMainWindow):
         if self.anim_timer:
             self.anim_timer.stop()
         self._anim_cleanup()
+        self.progress_label.setText("")
         self.status_bar.showMessage("动画已停止")
+
+    def _on_speed_changed(self, text):
+        speed_map = {"0.5x": 0.5, "1x": 1.0, "2x": 2.0, "4x": 4.0}
+        self.anim_speed = speed_map.get(text, 1.0)
+        if self.anim_playing:
+            self.status_bar.showMessage(f"动画速度: {text}")
 
     def _anim_cleanup(self):
         self.anim_frame = 0
-        for name in ["robot", "fov", "wake", "anim_trail"]:
+        # 清理船形机器人
+        self._remove_boat_actors()
+        # 清理残留尾迹小球和渐显路径
+        if hasattr(self, 'anim_trail'):
+            for w in self.anim_trail:
+                try:
+                    self.plotter.remove_actor(w)
+                except Exception:
+                    pass
+        self.anim_trail = []
+        # 清理 HUD 文字
+        for t in self.hud_texts:
+            try:
+                self.plotter.remove_actor(t)
+            except Exception:
+                pass
+        self.hud_texts = []
+        # 清理脉冲环
+        for actor, _ in self.pulse_rings:
+            try:
+                self.plotter.remove_actor(actor)
+            except Exception:
+                pass
+        self.pulse_rings = []
+        # 清理到达标签
+        for name in ["robot_hull", "robot_cabin", "robot_bow", "fov", "anim_trail"]:
             try:
                 self.plotter.remove_actor(name)
             except Exception:
                 pass
+        # 清理途经点到达标签
+        for wi in range(len(self.grid.mission_waypoints if self.grid else [])):
+            try:
+                self.plotter.remove_actor(f"arrival_label_{wi}")
+            except Exception:
+                pass
         self.anim_robot = None
+        self.anim_robot_cabin = None
         self.fov_actor = None
+        self.visited_waypoints = set()
+        self.battery_pct = 100.0
 
     def _anim_tick(self):
         if not self.anim_playing or not self.path3d:
             return
         self.anim_frame += self.anim_speed
         idx = int(self.anim_frame)
-        if idx >= len(self.path3d) - 1:
+        total = len(self.path3d)
+        # 进度显示
+        pct = min(100, int(idx / max(1, total - 1) * 100))
+        self.progress_label.setText(f"{pct}%")
+        if idx >= total - 1:
             self.anim_playing = False
             if self.anim_timer:
                 self.anim_timer.stop()
-            self.status_bar.showMessage("路径动画完成 — 点击播放重放")
+            self.progress_label.setText("100% ✓")
+            # 任务完成摘要
+            wp_count = len(self.visited_waypoints)
+            total_wp = len(self.grid.mission_waypoints or [])
+            self.status_bar.showMessage(
+                f"路径动画完成 ✓ — 途经点 {wp_count}/{total_wp} 已到达 | "
+                f"剩余电量 {self.battery_pct:.0f}% | 点击播放重放"
+            )
             return
 
-        # 当前和下一个点，线性插值平滑
+        # ── 当前位置（线性插值平滑） ──
         p_cur = self.path3d[idx]
         p_nxt = self.path3d[min(idx + 1, len(self.path3d) - 1)]
         frac = self.anim_frame - idx
@@ -548,31 +1001,75 @@ class MainWindow(QMainWindow):
         y = p_cur[1] + (p_nxt[1] - p_cur[1]) * frac
         z_raw = p_cur[2] + (p_nxt[2] - p_cur[2]) * frac
 
-        # 波浪起伏效果：z 随时间和位置微微波动
+        # 波浪起伏效果
         wave_z = 0.06 * math.sin(x * 1.2 + self.wave_time * 3) * math.cos(y * 1.0 + self.wave_time * 2.5)
         z = -z_raw + wave_z
 
-        # 朝向
+        # ── 航向和速度 ──
         if idx + 1 < len(self.path3d):
             dx_f = p_nxt[0] - p_cur[0]
             dy_f = p_nxt[1] - p_cur[1]
+            if abs(dx_f) > 0.001 or abs(dy_f) > 0.001:
+                self.boat_heading = math.atan2(dy_f, dx_f)
 
-        # 更新机器人位置
-        if self.anim_robot:
-            self.plotter.remove_actor(self.anim_robot)
-        robot = self.pv.Sphere(center=(x, y, z), radius=0.45)
-        self.anim_robot = self.plotter.add_mesh(
-            robot, color="#ff4400", pbr=True, metallic=0.2, roughness=0.3, name="robot",
+        # 速度计算 (节: 1 knot ≈ 0.514 m/s, 网格单位→米)
+        if self.last_boat_pos:
+            px, py, _ = self.last_boat_pos
+            dist_m = math.sqrt((x - px)**2 + (y - py)**2) * self.grid.resolution
+            speed_ms = dist_m / (0.06 / self.anim_speed)  # 60ms per tick
+            self.boat_speed_kn = speed_ms / 0.514  # m/s → knots
+        self.last_boat_pos = (x, y, z)
+
+        # ── 更新船形机器人 ──
+        self._remove_boat_actors()
+        self.anim_robot, self.anim_robot_cabin = self._make_boat_actors(
+            (x, y, z), self.boat_heading,
         )
 
-        # 更新 FOV 朝向
-        self._update_fov((x, y, -z_raw), dx_f if idx + 1 < len(self.path3d) else 1.0,
-                         dy_f if idx + 1 < len(self.path3d) else 0.0)
+        # ── 更新 FOV ──
+        if idx + 1 < len(self.path3d):
+            self._update_fov((x, y, -z_raw), dx_f, dy_f)
 
-        # 尾迹：每隔几帧添加一个衰减点
+        # ── 更新 HUD ──
+        depth_display = abs(z_raw) / max(1, self.grid.nz) * self.grid.depth.max()
+        self._update_hud((x, y, z), self.boat_heading, self.boat_speed_kn, depth_display)
+
+        # ── 途经点到达检测 ──
+        waypoints_all = self.grid.mission_waypoints or []
+        for wi, wp in enumerate(waypoints_all):
+            if wi in self.visited_waypoints:
+                continue
+            dist_to_wp = math.sqrt(
+                (x - wp[0])**2 + (y - wp[1])**2 + (z + wp[2])**2
+            )
+            if dist_to_wp < 1.2:  # 到达阈值
+                self.visited_waypoints.add(wi)
+                self._spawn_pulse((wp[0], wp[1], -wp[2]))
+                self.arrival_log.append((wi, f"WP{wi+1}"))
+                self.status_bar.showMessage(
+                    f"到达途经点 {wi+1}/{len(waypoints_all)} — 坐标 ({wp[0]}, {wp[1]})"
+                )
+                # 到达时飘文字
+                self.plotter.add_point_labels(
+                    [[wp[0], wp[1], -wp[2] + 0.8]],
+                    [f"✓ WP{wi+1}"],
+                    font_size=14, text_color="#ffdd44", point_size=1,
+                    name=f"arrival_label_{wi}",
+                )
+
+        # ── 更新脉冲特效 ──
+        self._update_pulses()
+
+        # ── 电量消耗 ──
+        self.battery_pct = max(0, self.battery_pct - self.energy_per_frame / max(1, self.total_energy_kj) * 100)
+        if self.battery_pct < 15:
+            self.battery_pct = max(5, self.battery_pct)  # 不会真的归零
+        self.lbl_battery.setText(f"电量: {self.battery_pct:.0f}% {'🔴' if self.battery_pct < 25 else '🟡' if self.battery_pct < 50 else '🟢'}")
+
+        # ── 尾迹 ──
         if idx % 4 == 0:
             wake_dot = self.plotter.add_mesh(
-                self.pv.Sphere(center=(x, y, z + 0.05), radius=0.08),
+                pv.Sphere(center=(x, y, z + 0.05), radius=0.08),
                 color="#88ccff", opacity=0.5, name=f"wake_{idx}",
             )
             self.anim_trail.append(wake_dot)
@@ -583,12 +1080,12 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # 路径渐显
+        # ── 路径渐显 ──
         if idx % 8 == 0:
             partial = np.array([[q[0], q[1], -q[2]] for q in self.path3d[:idx + 1]], dtype=np.float64)
             if len(partial) >= 2:
                 try:
-                    tube = self.pv.Spline(partial, n_points=max(len(partial), 3) * 2).tube(radius=0.08)
+                    tube = pv.Spline(partial, n_points=max(len(partial), 3) * 2).tube(radius=0.08)
                     self.plotter.add_mesh(tube, color="#ff9944", name="anim_trail", opacity=0.7, pbr=True)
                 except Exception:
                     pass
@@ -598,7 +1095,7 @@ class MainWindow(QMainWindow):
             self.plotter.remove_actor(self.fov_actor)
         if self.path3d:
             p = self.path3d[0]
-            cone = self.pv.Cone(center=(p[0], p[1], -p[2]), direction=(1, 0, 0),
+            cone = pv.Cone(center=(p[0], p[1], -p[2]), direction=(1, 0, 0),
                                  height=3.5, radius=1.8, resolution=20)
             self.fov_actor = self.plotter.add_mesh(cone, color="#ffcc44", opacity=0.22, name="fov")
 
@@ -606,7 +1103,7 @@ class MainWindow(QMainWindow):
         if self.fov_actor:
             self.plotter.remove_actor(self.fov_actor)
         mag = (dx * dx + dy * dy) ** 0.5 or 1.0
-        cone = self.pv.Cone(center=pos, direction=(dx / mag, dy / mag, 0.05),
+        cone = pv.Cone(center=pos, direction=(dx / mag, dy / mag, 0.05),
                              height=3.5, radius=1.8, resolution=20)
         self.fov_actor = self.plotter.add_mesh(cone, color="#ffcc44", opacity=0.22, name="fov")
 
@@ -618,6 +1115,8 @@ class MainWindow(QMainWindow):
             state = {
                 "waypoints": list(self.grid.mission_waypoints),
                 "obstacles": self.grid.obstacles.copy(),
+                "start": self.grid.mission_start,
+                "end": self.grid.mission_end,
             }
             self._undo_stack.append(state)
             if len(self._undo_stack) > 20:
@@ -629,6 +1128,8 @@ class MainWindow(QMainWindow):
         state = self._undo_stack.pop()
         self.grid.mission_waypoints = state["waypoints"]
         self.grid.obstacles = state["obstacles"]
+        self.grid.mission_start = state.get("start")
+        self.grid.mission_end = state.get("end")
         self.plotter.clear()
         self._draw()
         self._refresh_info()
@@ -651,8 +1152,10 @@ class MainWindow(QMainWindow):
         g = self.grid
         n_obs = int(np.sum(g.obstacles))
         d, f, dc = (0, 0, 0)
+        energy_info = None
         if self.path3d:
             d, f, dc = compute_3d_path_cost(g, self.path3d)
+            energy_info = compute_energy_estimate(g, self.path3d)
         lines = [
             "=== 水域机器人路径规划报告 ===",
             f"网格: {g.nx} x {g.ny} x {g.nz} @ {g.resolution}m/格",
@@ -665,7 +1168,16 @@ class MainWindow(QMainWindow):
             f"总距离: {d:,.0f} m",
             f"水流代价: {f:,.0f}",
             f"深度代价: {dc:,.0f}",
-            f"路径点数: {len(self.path3d) if self.path3d else 0}",
+        ]
+        if energy_info:
+            lines += [
+                f"能耗估算: {energy_info['energy_consumption_kj']:,.0f} kJ",
+                f"预估时间: {energy_info['estimated_time_min']:.1f} min",
+                f"路径点数: {energy_info['waypoint_count']}",
+            ]
+        else:
+            lines.append(f"路径点数: {len(self.path3d) if self.path3d else 0}")
+        lines += [
             "",
             "--- 路径坐标 ---",
         ]
@@ -683,12 +1195,20 @@ class MainWindow(QMainWindow):
         if g is None:
             return
         n_obs = int(np.sum(g.obstacles))
-        self.lbl_info.setPlainText(
-            f"网格: {g.nx} x {g.ny} x {g.nz}\n"
-            f"精度: {g.resolution:.0f} m/格\n"
+        # 平均水压 (表层)
+        avg_pressure = g.pressure[0, g.depth > 0].mean() if (g.depth > 0).any() else 0
+        # 天气
+        wind_dir, wind_spd, wave_h = g.get_weather_at(g.nx // 2, g.ny // 2)
+        n_eddies = len(g.eddies)
+        info = (
+            f"网格: {g.nx} x {g.ny} x {g.nz}  @{g.resolution:.0f}m/格\n"
             f"障碍物: {n_obs}  途经点: {len(g.mission_waypoints or [])}\n"
+            f"水深: {g.depth[g.depth>0].min():.0f}~{g.depth.max():.0f}m  "
+            f"表层水压: {avg_pressure:.0f}kPa\n"
+            f"天气: 风速{wind_spd:.0f}m/s  浪高{wave_h:.1f}m  漩涡: {n_eddies}个\n"
             f"起点: {g.mission_start or '未设定'}"
         )
+        self.lbl_info.setPlainText(info)
 
     # ═══════════════════ 智能决策 ═══════════════════
 
