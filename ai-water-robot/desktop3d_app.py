@@ -301,6 +301,44 @@ class MainWindow(QMainWindow):
         l4.addWidget(self.lbl_depth_hint)
         lay.addWidget(g4)
 
+        # 坐标精确输入
+        g_coord = QGroupBox("精确坐标输入")
+        l_coord = QVBoxLayout(g_coord)
+        l_coord.setSpacing(4)
+        # 坐标输入行
+        h_coord = QHBoxLayout()
+        h_coord.addWidget(QLabel("X:"))
+        self.input_x = QLineEdit("0")
+        self.input_x.setFixedWidth(42); self.input_x.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_x.setToolTip("X 坐标 (东向)")
+        h_coord.addWidget(self.input_x)
+        h_coord.addWidget(QLabel("Y:"))
+        self.input_y = QLineEdit("0")
+        self.input_y.setFixedWidth(42); self.input_y.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_y.setToolTip("Y 坐标 (北向)")
+        h_coord.addWidget(self.input_y)
+        h_coord.addWidget(QLabel("Z:"))
+        self.input_z = QLineEdit("0")
+        self.input_z.setFixedWidth(42); self.input_z.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_z.setToolTip("Z 坐标 (深度层, 0=表层)")
+        h_coord.addWidget(self.input_z)
+        l_coord.addLayout(h_coord)
+        # 操作选择 + 执行
+        h_act = QHBoxLayout()
+        self.coord_action = QComboBox()
+        self.coord_action.addItems(["设起点", "加途经点", "设终点", "切换障碍物"])
+        self.coord_action.setToolTip("选择坐标操作类型")
+        h_act.addWidget(self.coord_action)
+        self.btn_coord_exec = QPushButton("执行")
+        self.btn_coord_exec.setObjectName("btnPrimary")
+        self.btn_coord_exec.clicked.connect(self._exec_coord_input)
+        h_act.addWidget(self.btn_coord_exec)
+        l_coord.addLayout(h_act)
+        self.lbl_coord_range = QLabel("范围: X:0~29 Y:0~29 Z:0~7")
+        self.lbl_coord_range.setStyleSheet("color:#5a6a7a; font-size:10px;")
+        l_coord.addWidget(self.lbl_coord_range)
+        lay.addWidget(g_coord)
+
         # 操作提示
         g5 = QGroupBox("操作提示")
         l5 = QVBoxLayout(g5)
@@ -409,6 +447,7 @@ class MainWindow(QMainWindow):
         self._start_waves()
         self.plotter.reset_camera()
         self._refresh_info()
+        self._update_coord_range()
 
     def _open_json(self):
         p, _ = QFileDialog.getOpenFileName(self, "打开 JSON 文件", "", "JSON (*.json);;所有文件 (*)")
@@ -565,8 +604,8 @@ class MainWindow(QMainWindow):
             self.plotter.add_mesh(be, color=C["end"], pbr=True, name="end")
             self.plotter.add_point_labels([be.center], ["终点"], font_size=13, text_color=C["end"], point_size=1)
 
-        # 路径
-        if g.mission_start and g.mission_waypoints:
+        # 路径 (支持起点→终点直连，无需途经点)
+        if g.mission_start and (g.mission_waypoints or g.mission_end):
             self._plan()
 
         # 罗盘
@@ -574,7 +613,13 @@ class MainWindow(QMainWindow):
 
     def _plan(self):
         g = self.grid
-        if not (g and g.mission_start and g.mission_waypoints):
+        if not (g and g.mission_start):
+            return
+        # 至少需要途经点或终点之一才能规划
+        if not g.mission_waypoints and not g.mission_end:
+            return
+        # 确保终点不同于起点
+        if not g.mission_waypoints and g.mission_end == g.mission_start:
             return
         self.path3d = plan_tsp_3d(g, g.mission_start, g.mission_waypoints, g.mission_end,
                                   strategy=self.current_strategy)
@@ -623,6 +668,72 @@ class MainWindow(QMainWindow):
         self.plotter.add_mesh(pv.StructuredGrid(xx, yy, zz), color="#3399bb",
                                opacity=0.32, name="wave", show_edges=False, smooth_shading=True)
 
+    # ═══════════════════ 坐标输入 ═══════════════════
+
+    def _exec_coord_input(self):
+        """执行精确坐标输入操作"""
+        if self.grid is None:
+            QMessageBox.warning(self, "无数据", "请先加载水况数据")
+            return
+        g = self.grid
+        try:
+            x = int(self.input_x.text().strip())
+            y = int(self.input_y.text().strip())
+            z = int(self.input_z.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "输入错误", "X/Y/Z 必须为整数")
+            return
+
+        # 范围校验
+        if not (0 <= x < g.nx and 0 <= y < g.ny and 0 <= z < g.nz):
+            QMessageBox.warning(
+                self, "坐标越界",
+                f"坐标超出范围!\nX: 0~{g.nx-1}\nY: 0~{g.ny-1}\nZ: 0~{g.nz-1}"
+            )
+            return
+
+        # 水路校验
+        if g.depth[y, x] <= 0:
+            QMessageBox.warning(self, "不可通行", f"({x}, {y}) 为陆地，无法放置")
+            return
+
+        action = self.coord_action.currentText()
+        self._push_undo()
+
+        if action == "设起点":
+            g.mission_start = (x, y, z)
+            msg = f"起点已设置 ({x}, {y}, {z})"
+        elif action == "加途经点":
+            if g.mission_start is None:
+                QMessageBox.warning(self, "无起点", "请先设置起点再添加途经点")
+                self._undo_stack.pop()
+                return
+            g.mission_waypoints.append((x, y, z))
+            msg = f"途经点已添加 ({x}, {y}, {z}) — 共 {len(g.mission_waypoints)} 个"
+        elif action == "设终点":
+            if g.mission_start is None:
+                QMessageBox.warning(self, "无起点", "请先设置起点再设置终点")
+                self._undo_stack.pop()
+                return
+            g.mission_end = (x, y, z)
+            msg = f"终点已设置 ({x}, {y}, {z})"
+        elif action == "切换障碍物":
+            g.obstacles[z, y, x] = not g.obstacles[z, y, x]
+            msg = f"障碍物 {'放置' if g.obstacles[z, y, x] else '移除'} ({x}, {y}, {z})"
+
+        self.plotter.clear()
+        self._draw()
+        self._refresh_info()
+        self.status_bar.showMessage(msg)
+
+    def _update_coord_range(self):
+        """更新坐标输入范围提示"""
+        if self.grid:
+            g = self.grid
+            self.lbl_coord_range.setText(
+                f"范围: X:0~{g.nx-1}  Y:0~{g.ny-1}  Z:0~{g.nz-1}"
+            )
+
     # ═══════════════════ 交互（见 _on_click 方法）═══════════════════
 
     def _replan(self):
@@ -640,14 +751,14 @@ class MainWindow(QMainWindow):
             "energy — 节能优先": "energy",
         }
         self.current_strategy = strategy_map.get(text, "balanced")
-        if self.grid and self.grid.mission_start and self.grid.mission_waypoints:
+        if self.grid and self.grid.mission_start and (self.grid.mission_waypoints or self.grid.mission_end):
             self._replan()
             self.status_bar.showMessage(f"策略已切换: {text}")
 
     def _compare_strategies(self):
         """多策略对比弹窗"""
         g = self.grid
-        if not (g and g.mission_start and g.mission_waypoints):
+        if not (g and g.mission_start and (g.mission_waypoints or g.mission_end)):
             QMessageBox.warning(self, "无法对比", "请先加载数据并设置起点和途经点")
             return
         self.status_bar.showMessage("正在对比四种策略...")
@@ -1174,6 +1285,11 @@ class MainWindow(QMainWindow):
                 f"能耗估算: {energy_info['energy_consumption_kj']:,.0f} kJ",
                 f"预估时间: {energy_info['estimated_time_min']:.1f} min",
                 f"路径点数: {energy_info['waypoint_count']}",
+                f"水压代价: {energy_info.get('pressure_cost', 0):.0f}",
+                f"天气代价: {energy_info.get('weather_cost', 0):.0f}",
+                f"水温代价: {energy_info.get('temperature_cost', 0):.0f}",
+                f"能见度代价: {energy_info.get('visibility_cost', 0):.0f}",
+                f"潮汐放大: {energy_info.get('tidal_amplification', 0):.2f}x",
             ]
         else:
             lines.append(f"路径点数: {len(self.path3d) if self.path3d else 0}")
@@ -1200,12 +1316,19 @@ class MainWindow(QMainWindow):
         # 天气
         wind_dir, wind_spd, wave_h = g.get_weather_at(g.nx // 2, g.ny // 2)
         n_eddies = len(g.eddies)
+        # 水温和能见度
+        avg_temp = g.temperature[g.depth > 0].mean() if (g.depth > 0).any() else 0
+        avg_vis = g.visibility[g.depth > 0].mean() if (g.depth > 0).any() else 0
+        tidal_label = {0: "低潮", 0.25: "退潮中", 0.5: "半潮", 0.75: "涨潮中", 1.0: "高潮"}.get(
+            round(g.tidal_phase * 4) / 4, f"相位{g.tidal_phase:.2f}"
+        )
         info = (
             f"网格: {g.nx} x {g.ny} x {g.nz}  @{g.resolution:.0f}m/格\n"
             f"障碍物: {n_obs}  途经点: {len(g.mission_waypoints or [])}\n"
             f"水深: {g.depth[g.depth>0].min():.0f}~{g.depth.max():.0f}m  "
-            f"表层水压: {avg_pressure:.0f}kPa\n"
+            f"水压: {avg_pressure:.0f}kPa\n"
             f"天气: 风速{wind_spd:.0f}m/s  浪高{wave_h:.1f}m  漩涡: {n_eddies}个\n"
+            f"水温: {avg_temp:.1f}°C  能见度: {avg_vis:.1f}m  潮汐: {tidal_label}\n"
             f"起点: {g.mission_start or '未设定'}"
         )
         self.lbl_info.setPlainText(info)
