@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
         self.anim_frame = 0
         self.anim_playing = False
         self.anim_speed = 1.0
+        self.camera_follow = False   # 镜头跟随开关
         self.anim_robot = None       # 船身主体 actor
         self.anim_robot_cabin = None # 船舱 actor
         self._boat_bow_actor = None  # 船头三角 actor
@@ -198,6 +199,13 @@ class MainWindow(QMainWindow):
         self.speed_combo.setFixedWidth(65)
         self.speed_combo.setStyleSheet("font-size:12px; padding:2px 4px;")
         tb.addWidget(self.speed_combo)
+        # 镜头跟随
+        from PySide6.QtWidgets import QCheckBox
+        self.chk_camera_follow = QCheckBox("跟随")
+        self.chk_camera_follow.setToolTip("镜头跟随机器人移动")
+        self.chk_camera_follow.setStyleSheet("font-size:12px; font-weight:bold; color:#2c3e50;")
+        self.chk_camera_follow.toggled.connect(self._toggle_camera_follow)
+        tb.addWidget(self.chk_camera_follow)
         # 进度
         self.progress_label = QLabel("")
         self.progress_label.setStyleSheet("color:#2980b9; font-weight:bold; font-size:12px; padding-left:8px;")
@@ -209,6 +217,8 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addWidget(self._btn("保存任务", self._save_mission))
         tb.addWidget(self._btn("加载任务", self._load_mission))
+        tb.addWidget(self._btn("清起点", self._clear_start))
+        tb.addWidget(self._btn("清终点", self._clear_end))
         tb.addWidget(self._btn("重置场景", self._clear_all, danger=True))
 
         # 状态栏
@@ -711,14 +721,17 @@ class MainWindow(QMainWindow):
             self.path_actor = self.plotter.add_mesh(tube, color=C["path"], pbr=True, metallic=0.1, name="path")
         d, f, dc = compute_3d_path_cost(g, self.path3d)
         energy = compute_energy_estimate(g, self.path3d)
-        # 策略中文名
+
+        # 详细路径统计
+        stats = self._compute_path_stats(self.path3d, g)
+
         strategy_names = {"balanced": "均衡", "safe": "安全", "fast": "快速", "energy": "节能"}
         sn = strategy_names.get(self.current_strategy, self.current_strategy)
         self.lbl_dist.setText(f"总距离: {d:,.0f} m [{sn}]")
-        self.lbl_flow.setText(f"水流代价: {f:,.0f}")
-        self.lbl_depth.setText(f"深度代价: {dc:,.0f}")
-        self.lbl_energy.setText(f"能耗: {energy['energy_consumption_kj']:,.0f} kJ")
-        self.lbl_time.setText(f"预估时间: {energy['estimated_time_min']:.1f} min")
+        self.lbl_flow.setText(f"水流代价: {f:,.0f} | 顺流: {stats['downstream_pct']:.0f}%")
+        self.lbl_depth.setText(f"深度: {stats['min_depth']:.0f}~{stats['max_depth']:.0f}m | 起伏{stats['depth_range']:.0f}m")
+        self.lbl_energy.setText(f"能耗: {energy['energy_consumption_kj']:,.0f} kJ | 急转: {stats['sharp_turns']}次")
+        self.lbl_time.setText(f"预估时间: {energy['estimated_time_min']:.1f} min | 均速: {stats['avg_speed_ms']:.1f}m/s")
         self.lbl_battery.setText(f"电池续航: 约 {energy['estimated_time_min']:.0f} min @ 100%")
 
     def _start_waves(self):
@@ -831,36 +844,78 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"策略已切换: {text}")
 
     def _compare_strategies(self):
-        """多策略对比弹窗"""
+        """多策略对比 — 3D视图同时显示4条路径"""
         g = self.grid
         if not (g and g.mission_start and (g.mission_waypoints or g.mission_end)):
-            QMessageBox.warning(self, "无法对比", "请先加载数据并设置起点和途经点")
+            QMessageBox.warning(self, "无法对比", "请先加载数据并设置起点和途经点/终点")
             return
         self.status_bar.showMessage("正在对比四种策略...")
-        results = compare_strategies(g, g.mission_start, g.mission_waypoints, g.mission_end)
-        # 构建对比报告
-        lines = ["═══ 策略对比结果 ═══", ""]
-        strategy_names = {"balanced": "均衡", "safe": "安全优先", "fast": "速度优先", "energy": "节能优先"}
-        best_dist = min((r["distance"] for r in results.values() if r), default=0)
-        best_energy = min((r["energy_kj"] for r in results.values() if r), default=0)
-        for key, r in results.items():
-            name = strategy_names.get(key, key)
-            if r is None:
-                lines.append(f"  {name}: 无可行路径")
-                continue
-            dist_mark = " ★最短" if r["distance"] == best_dist else ""
-            energy_mark = " ★最省" if r["energy_kj"] == best_energy else ""
-            lines.append(
-                f"  {name}: 距离 {r['distance']:,.0f}m{dist_mark} | "
-                f"能耗 {r['energy_kj']:,.0f}kJ{energy_mark} | "
-                f"时间 {r['time_min']:.1f}min"
+
+        # 清除旧的对比路径
+        for name in ["cmp_balanced", "cmp_safe", "cmp_fast", "cmp_energy"]:
+            try:
+                self.plotter.remove_actor(name)
+            except Exception:
+                pass
+
+        strategy_colors = {
+            "balanced": ("#e8590c", "均衡"),
+            "safe":      ("#27ae60", "安全"),
+            "fast":      ("#e74c3c", "快速"),
+            "energy":    ("#2980b9", "节能"),
+        }
+        results = {}
+        best_dist = float("inf")
+        best_energy = float("inf")
+
+        for strategy, (color, cn_name) in strategy_colors.items():
+            path = plan_tsp_3d(
+                g, g.mission_start, g.mission_waypoints, g.mission_end,
+                strategy=strategy,
             )
-        lines.append("")
-        lines.append("提示: 在控制面板下拉框中切换策略可查看对应路径")
-        msg = "\n".join(lines)
-        # 在 AI 面板中显示对比结果
-        self.lbl_ai.setText(msg)
-        self.status_bar.showMessage("策略对比完成 — 结果已显示在智能决策面板")
+            if path is None:
+                results[strategy] = None
+                continue
+            d, f, dc = compute_3d_path_cost(g, path)
+            energy = compute_energy_estimate(g, path)
+            results[strategy] = {
+                "path": path, "distance": d, "flow_cost": f,
+                "depth_cost": dc, "energy_kj": energy["energy_consumption_kj"],
+                "time_min": energy["estimated_time_min"],
+            }
+            if d < best_dist:
+                best_dist = d
+            if energy["energy_consumption_kj"] < best_energy:
+                best_energy = energy["energy_consumption_kj"]
+
+            # 绘制路径
+            pts = np.array([[p[0], p[1], -p[2]] for p in path], dtype=np.float64)
+            if len(pts) >= 2:
+                tube = pv.Spline(pts, n_points=max(len(pts), 2) * 2).tube(radius=0.08)
+                self.plotter.add_mesh(
+                    tube, color=color, opacity=0.65, pbr=True, metallic=0.05,
+                    name=f"cmp_{strategy}",
+                )
+
+        # 图例（用text标注在角落）
+        legend_lines = ["═══ 策略对比 ═══"]
+        for strategy, (color, cn_name) in strategy_colors.items():
+            r = results.get(strategy)
+            if r is None:
+                legend_lines.append(f"  {cn_name}: 无可行路径")
+            else:
+                dm = " ★最短" if r["distance"] == best_dist else ""
+                em = " ★最省" if r["energy_kj"] == best_energy else ""
+                legend_lines.append(
+                    f"  {cn_name}: {r['distance']:,.0f}m{dm} | {r['energy_kj']:,.0f}kJ{em}"
+                )
+        legend_lines.append("提示: 切换下拉框策略查看单条路径")
+
+        self.lbl_ai.setText("\n".join(legend_lines))
+        self.status_bar.showMessage(
+            f"策略对比完成 — 4条路径已叠加显示 | "
+            f"最短: {best_dist:,.0f}m | 最省: {best_energy:,.0f}kJ"
+        )
 
     def _clear_wp(self):
         if self.grid:
@@ -906,6 +961,29 @@ class MainWindow(QMainWindow):
             self.grid.obstacles[:] = False
             self.plotter.clear()
             self._draw()
+
+    def _clear_start(self):
+        """单独清除起点"""
+        if self.grid:
+            self._push_undo()
+            self.grid.mission_start = None
+            self.path3d = None
+            self.path_actor = None
+            self.plotter.clear()
+            self._draw()
+            self._refresh_info()
+            self.status_bar.showMessage("起点已清除")
+
+    def _clear_end(self):
+        """单独清除终点"""
+        if self.grid:
+            self._push_undo()
+            self.grid.mission_end = None
+            self.path3d = None
+            self.path_actor = None
+            self.plotter.clear()
+            self._draw()
+            self.status_bar.showMessage("终点已清除")
 
     def _clear_all(self):
         """重置整个场景：清除所有任务点 (起点/途经点/终点) 和障碍物"""
@@ -1095,6 +1173,71 @@ class MainWindow(QMainWindow):
             font_size=14, text_color="#e74c3c", point_size=1, name="compass_label",
         )
 
+    # ═══════════════════ 路径统计 ═══════════════════
+
+    def _compute_path_stats(self, path, grid):
+        """计算路径详细统计"""
+        if not path or len(path) < 2:
+            return {"min_depth": 0, "max_depth": 0, "depth_range": 0,
+                    "sharp_turns": 0, "downstream_pct": 0, "avg_speed_ms": 0}
+
+        # 深度统计
+        depths = []
+        for p in path:
+            d = grid.depth[min(p[1], grid.ny - 1), min(p[0], grid.nx - 1)]
+            if d > 0:
+                depths.append(d)
+        min_d = min(depths) if depths else 0
+        max_d = max(depths) if depths else 0
+
+        # 急转弯检测 (>60度方向变化)
+        sharp_turns = 0
+        downstream_count = 0
+        total_segments = len(path) - 1
+        for i in range(1, len(path) - 1):
+            prev_dx = path[i][0] - path[i - 1][0]
+            prev_dy = path[i][1] - path[i - 1][1]
+            next_dx = path[i + 1][0] - path[i][0]
+            next_dy = path[i + 1][1] - path[i][1]
+
+            prev_angle = math.atan2(prev_dy, prev_dx)
+            next_angle = math.atan2(next_dy, next_dx)
+            angle_diff = abs(next_angle - prev_angle)
+            if angle_diff > math.pi:
+                angle_diff = 2 * math.pi - angle_diff
+            if angle_diff > math.pi / 3:  # >60度
+                sharp_turns += 1
+
+            # 顺流检测
+            cur_vec, cur_spd = grid.get_current_at(path[i][0], path[i][1], path[i][2])
+            if cur_spd > 0.01:
+                move_angle = math.atan2(next_dy, next_dx)
+                flow_angle = math.atan2(cur_vec[1], cur_vec[0])
+                diff = abs(move_angle - flow_angle)
+                if diff > math.pi:
+                    diff = 2 * math.pi - diff
+                if diff < math.pi / 4:  # <45度=顺流
+                    downstream_count += 1
+
+        downstream_pct = downstream_count / max(1, total_segments) * 100
+
+        # 均速（节→m/s）
+        total_dist_km = sum(
+            math.sqrt((path[i][0] - path[i-1][0])**2 + (path[i][1] - path[i-1][1])**2)
+            * grid.resolution / 1000
+            for i in range(1, len(path))
+        )
+        avg_speed = 5.0  # 默认5节≈2.5m/s
+
+        return {
+            "min_depth": min_d,
+            "max_depth": max_d,
+            "depth_range": max_d - min_d,
+            "sharp_turns": sharp_turns,
+            "downstream_pct": downstream_pct,
+            "avg_speed_ms": avg_speed,
+        }
+
     # ═══════════════════ 动画 ═══════════════════
 
     def _anim_play(self):
@@ -1164,6 +1307,9 @@ class MainWindow(QMainWindow):
         self.anim_speed = speed_map.get(text, 1.0)
         if self.anim_playing:
             self.status_bar.showMessage(f"动画速度: {text}")
+
+    def _toggle_camera_follow(self, checked):
+        self.camera_follow = bool(checked)
 
     def _anim_cleanup(self):
         self.anim_frame = 0
@@ -1265,6 +1411,22 @@ class MainWindow(QMainWindow):
 
         # ── 船模位置：原地更新，不重建网格（核心优化） ──
         self._update_boat_position((x, y, z), self.boat_heading)
+
+        # ── 镜头跟随（每5帧） ──
+        if self.camera_follow and self._frame_count % 5 == 0:
+            try:
+                # 相机在机器人后方上空跟随
+                follow_dist = 8
+                cam_x = x - math.cos(self.boat_heading) * follow_dist
+                cam_y = y - math.sin(self.boat_heading) * follow_dist
+                cam_z = z + follow_dist * 0.6
+                self.plotter.camera_position = [
+                    (cam_x, cam_y, cam_z),  # 相机位置
+                    (x, y, z),              # 焦点（机器人位置）
+                    (0, 0, 1),              # 上方向
+                ]
+            except Exception:
+                pass
 
         # ── FOV：每5帧更新 ──
         if self._frame_count % 5 == 0:
