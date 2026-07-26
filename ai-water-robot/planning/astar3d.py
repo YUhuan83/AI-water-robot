@@ -403,15 +403,18 @@ def smooth_path(
     grid,
     max_iterations: int = 100,
     max_skip: int = 20,
+    protected_indices: set = None,
 ) -> List[Tuple[int, int, int]]:
     """
     路径平滑 — 移除冗余的中间点
     如果两个非相邻点之间可以直线通行，则删除中间所有点。
     max_skip 限制单次最多跳过多少点，防止误删途经点。
+    protected_indices 保护关键点不被删除（如途经点位置）。
     """
     if len(path) < 3:
         return path
 
+    protected = protected_indices or set()
     smoothed = list(path)
     changed = True
     iteration = 0
@@ -431,6 +434,10 @@ def smooth_path(
                 if smoothed[i] == smoothed[j]:
                     j -= 1
                     continue
+                # 不跳过被保护的点
+                if any(k in protected for k in range(i + 1, j)):
+                    j -= 1
+                    continue
                 if _is_path_passable(grid, smoothed[i], smoothed[j]):
                     # 删除 i+1 到 j-1 的点
                     smoothed = smoothed[:i + 1] + smoothed[j:]
@@ -440,6 +447,38 @@ def smooth_path(
             i += 1
 
     return smoothed
+
+
+def ensure_path_density(
+    path: List[Tuple[int, int, int]],
+    grid,
+    min_spacing: int = 4,
+) -> List[Tuple[int, int, int]]:
+    """
+    确保路径有足够密度：在连续两点间距离超过 min_spacing 格时线性插值补点。
+    保证路径在3D渲染时有足够的平滑度。
+    """
+    if len(path) < 2:
+        return path
+
+    dense = [path[0]]
+    for i in range(1, len(path)):
+        p1, p2 = path[i - 1], path[i]
+        dx, dy, dz = p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]
+        dist = max(abs(dx), abs(dy), abs(dz))
+        if dist > min_spacing:
+            # 线性插值补充中间点
+            steps = int(dist / max(1, min_spacing))
+            for s in range(1, steps + 1):
+                t = s / (steps + 1)
+                dense.append((
+                    int(round(p1[0] + dx * t)),
+                    int(round(p1[1] + dy * t)),
+                    int(round(p1[2] + dz * t)),
+                ))
+        dense.append(p2)
+
+    return dense
 
 
 def plan_tsp_3d(
@@ -477,7 +516,7 @@ def plan_tsp_3d(
             if seg is None:
                 seg = dijkstra3d(grid, start, end, strategy)
             if seg is not None:
-                seg = smooth_path(seg, grid, max_iterations=20, max_skip=5)
+                seg = smooth_path(seg, grid, max_iterations=10, max_skip=2)
             return seg
         return None
 
@@ -507,25 +546,47 @@ def plan_tsp_3d(
         return seg
 
     def build_full_path(order):
-        """根据途经点顺序构建并平滑完整路径"""
+        """根据途经点顺序构建并平滑完整路径，确保所有途经点被保护"""
         segments = []
         cur = start
         for wp in order:
             seg = plan_segment(cur, wp)
             if seg is None:
                 return None
-            seg = smooth_path(seg, grid, max_iterations=20, max_skip=5)
+            # 保护段末点(途经点)不被平滑删除，max_skip=2 每个段保留足够导航细节
+            protected = {0, len(seg) - 1}  # 首尾点=途经点，均保护
+            seg = smooth_path(seg, grid, max_iterations=10, max_skip=2,
+                              protected_indices=protected)
             segments.append(seg)
             cur = wp
         if end is not None and end != cur:
             seg = plan_segment(cur, end)
             if seg is None:
                 return None
-            seg = smooth_path(seg, grid, max_iterations=20, max_skip=5)
+            protected = {0, len(seg) - 1}  # 首尾点保护
+            seg = smooth_path(seg, grid, max_iterations=10, max_skip=2,
+                              protected_indices=protected)
             segments.append(seg)
+
+        # 拼接路径（去重连接点）
         full = list(segments[0])
         for seg in segments[1:]:
             full.extend(seg[1:])
+
+        # 验证所有途经点都在路径中
+        all_targets = list(order)
+        if end is not None and end not in all_targets:
+            all_targets.append(end)
+        for target in all_targets:
+            if not any(p == target for p in full):
+                # 途经点遗失——强制插入
+                best_idx = min(range(len(full)),
+                    key=lambda i: (full[i][0]-target[0])**2 + (full[i][1]-target[1])**2 + (full[i][2]-target[2])**2)
+                full.insert(best_idx + 1, target)
+
+        # 保证路径密度：每4格至少1个点
+        full = ensure_path_density(full, grid, min_spacing=4)
+
         return full
 
     # ── 阶段一: 快速评估找最优顺序 ──
@@ -563,9 +624,9 @@ def plan_tsp_3d(
     if full_path is None:
         return None
 
-    # 全局 2-opt 优化
-    if use_2opt and len(full_path) > 4:
-        full_path = optimize_2opt(full_path, grid)
+    # 全局 2-opt 优化（降低迭代次数，避免过度优化）
+    if use_2opt and len(full_path) > 10:
+        full_path = optimize_2opt(full_path, grid, max_iterations=200)
 
     return full_path
 

@@ -598,6 +598,24 @@ class MainWindow(QMainWindow):
         for wp in g.mission_waypoints:
             bw = pv.Sphere(center=(wp[0], wp[1], -wp[2]), radius=0.35)
             self.plotter.add_mesh(bw, color=C["wp"], name=f"wp.{wp}")
+        # 途经点顺序标签（仅在路径规划后显示）
+        if self.path3d and g.mission_waypoints:
+            ordered_wps = [wp for wp in g.mission_waypoints if wp in self.path3d]
+            if ordered_wps:
+                wp_labels = []
+                for wp in ordered_wps:
+                    idx = self.path3d.index(wp) if wp in self.path3d else -1
+                    if idx >= 0:
+                        order = ordered_wps.index(wp) + 1
+                        wp_labels.append((wp, f"WP{order}"))
+                # 按途经点在路径中出现顺序显示编号
+                for (wp, label) in wp_labels:
+                    self.plotter.add_point_labels(
+                        [[wp[0], wp[1], -wp[2] + 0.5]],
+                        [label],
+                        font_size=12, text_color="#f39c12", point_size=1,
+                        name=f"wp_label_{wp}",
+                    )
         if g.mission_end and g.mission_end != g.mission_start:
             e = g.mission_end
             be = pv.Sphere(center=(e[0], e[1], -e[2]), radius=0.5)
