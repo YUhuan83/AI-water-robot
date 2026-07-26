@@ -2,7 +2,7 @@
 水域机器人 3D 智能决策平台 — PySide6 + PyVista
 """
 
-import os, sys, math, json
+import os, sys, math, json, random
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +20,8 @@ from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QKeySequence
 from pyvistaqt import QtInteractor
 import pyvista as pv
 
-from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river, demo_3d_harbor
+from environment.water_3d import Water3DGrid, demo_3d_coastal, demo_3d_river, demo_3d_harbor, demo_3d_windfarm
+from task_planner.mission_patterns import generate_mission, MISSION_PATTERNS
 from planning.astar3d import (
     plan_tsp_3d, compute_3d_path_cost, compute_energy_estimate,
     compare_strategies, compare_and_select_best, STRATEGY_WEIGHTS,
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         demo_menu.addAction("沿海水域", self._load_coastal)
         demo_menu.addAction("内河航道", self._load_river)
         demo_menu.addAction("港口码头", self._load_harbor)
+        demo_menu.addAction("海上风电场", self._load_windfarm)
 
         view_menu = mb.addMenu("视图(&V)")
         view_menu.addAction("重置视角", self._reset_view, "R")
@@ -203,6 +205,24 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._btn("沿海 Demo", self._load_coastal))
         tb.addWidget(self._btn("河道 Demo", self._load_river))
         tb.addWidget(self._btn("港口 Demo", self._load_harbor))
+        tb.addWidget(self._btn("风电场 Demo", self._load_windfarm))
+        tb.addSeparator()
+        # 随机任务
+        self.mission_pattern_combo = QComboBox()
+        self.mission_pattern_combo.addItems(list(MISSION_PATTERNS.keys()))
+        self.mission_pattern_combo.setCurrentIndex(3)  # scattered
+        self.mission_pattern_combo.setFixedWidth(90)
+        self.mission_pattern_combo.setToolTip("任务模式")
+        self.mission_pattern_combo.setStyleSheet("font-size:11px; padding:2px 4px;")
+        tb.addWidget(self.mission_pattern_combo)
+        self.wp_count_spin = QComboBox()
+        self.wp_count_spin.addItems(["3", "5", "8", "12"])
+        self.wp_count_spin.setCurrentIndex(1)  # 5
+        self.wp_count_spin.setFixedWidth(45)
+        self.wp_count_spin.setToolTip("途经点数量")
+        self.wp_count_spin.setStyleSheet("font-size:11px; padding:2px 4px;")
+        tb.addWidget(self.wp_count_spin)
+        tb.addWidget(self._btn("随机任务", self._generate_random_mission, primary=True))
         tb.addSeparator()
         tb.addWidget(self._btn("重新规划", self._replan, primary=True))
         tb.addSeparator()
@@ -577,6 +597,45 @@ class MainWindow(QMainWindow):
         self.load(demo_3d_river())
     def _load_harbor(self):
         self.load(demo_3d_harbor())
+
+    def _load_windfarm(self):
+        self.load(demo_3d_windfarm())
+
+    def _generate_random_mission(self):
+        """生成随机任务"""
+        g = self.grid
+        if not g:
+            QMessageBox.warning(self, "无数据", "请先加载场景数据")
+            return
+
+        pattern = self.mission_pattern_combo.currentText()
+        try:
+            count = int(self.wp_count_spin.currentText())
+        except ValueError:
+            count = 5
+
+        self._push_undo()
+        wps, suggested_end = generate_mission(g, pattern=pattern, count=count, z=0)
+
+        # 在可航行区域随机选起点
+        passable = [(x, y) for y in range(g.ny) for x in range(g.nx)
+                    if g.depth[y, x] > 0 and not g.obstacles[0, y, x]]
+        if passable:
+            sx, sy = random.choice(passable)
+            g.mission_start = (sx, sy, 0)
+        else:
+            g.mission_start = (2, 2, 0)
+
+        g.mission_waypoints = wps
+        g.mission_end = suggested_end
+
+        self.plotter.clear()
+        self._draw()
+        self._refresh_info()
+        self._refresh_wp_list()
+        self.status_bar.showMessage(
+            f"随机任务已生成: 模式={pattern} | 途经点={len(wps)} | 起点={g.mission_start}"
+        )
 
     # ═══════════════════ 渲染 ═══════════════════
 

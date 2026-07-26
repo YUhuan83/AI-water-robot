@@ -832,3 +832,94 @@ def demo_3d_harbor():
         end=(5, 2, 0),                        # 返回码头
     )
     return grid
+
+
+def demo_3d_windfarm():
+    """Demo: 海上风电场 28x28x6 — 风机阵列/海上升压站/电缆/运维巡检"""
+    grid = Water3DGrid(28, 28, 6, resolution=40.0)
+    grid.metadata = {
+        "name": "海上风电场 — 运维巡检",
+        "source": "模拟数据",
+        "description": "大型海上风电场，含12台风机、海上升压站、海底电缆。需定期巡检风机基础和电缆路由。",
+    }
+
+    # ── 均匀水深 20~25m ──
+    for y in range(grid.ny):
+        for x in range(grid.nx):
+            terrain = 2.0 * math.sin(x * 0.25) * math.cos(y * 0.3) + 1.5 * math.sin((x + y) * 0.2)
+            grid.depth[y, x] = 22.0 + terrain
+
+    # ── 12台风机 (4列×3行) ──
+    turbine_positions = []
+    for row in range(3):
+        for col in range(4):
+            tx = 4 + col * 6
+            ty = 5 + row * 8
+            turbine_positions.append((tx, ty))
+
+    substation_pos = (grid.nx // 2, grid.ny // 2)
+
+    # ── 风机单桩基础 (障碍物) ──
+    for tx, ty in turbine_positions:
+        for dz in range(2, 6):
+            grid.add_obstacle(tx, ty, dz, dz)
+        # 防冲刷石
+        for ddx in [-1, 1]:
+            for ddy in [-1, 1]:
+                grid.add_obstacle(tx + ddx, ty + ddy, 5, 5)
+
+    # ── 海上升压站 (大型结构) ──
+    sx, sy = substation_pos
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            for dz in range(2, 6):
+                grid.add_obstacle(sx + dx, sy + dy, dz, dz)
+
+    # ── 海底电缆 (风机→升压站) ──
+    for tx, ty in turbine_positions:
+        steps = max(abs(tx - sx), abs(ty - sy))
+        if steps > 0:
+            for s in range(steps + 1):
+                t = s / steps
+                cx = int(tx + (sx - tx) * t)
+                cy = int(ty + (sy - ty) * t)
+                if 0 <= cx < grid.nx and 0 <= cy < grid.ny:
+                    grid.add_obstacle(cx, cy, 5, 5)
+
+    # ── 水流: 潮汐流 ──
+    for y in range(grid.ny):
+        for x in range(grid.nx):
+            grid.currents["surface"][y, x] = [0.6, -0.3, 0.0]
+            grid.current_speeds["surface"][y, x] = 0.25 + 0.1 * math.sin(x * 0.3)
+    grid.set_uniform_current(dx=0.3, dy=-0.1, speed=0.15, layer="mid")
+    grid.set_uniform_current(dx=0.0, dy=0.0, speed=0.02, layer="bottom")
+
+    # ── 风机尾流效应 ──
+    for tx, ty in turbine_positions:
+        grid.add_eddy(cx=tx + 1.5, cy=ty, radius=2.5, strength=0.15)
+
+    # ── 环境 ──
+    grid.set_uniform_weather(dx=-0.5, dy=0.2, speed=7.0, wave_height=2.0)
+    grid.set_uniform_temperature(18.0)
+    grid.set_uniform_visibility(9.0)
+    grid.set_tidal_phase(0.4)
+
+    # ── 升压站附近能见度略低 ──
+    for y in range(grid.ny):
+        for x in range(grid.nx):
+            dist_sub = math.sqrt((x - sx)**2 + (y - sy)**2)
+            if dist_sub < 3:
+                grid.visibility[y, x] = 3.0
+
+    # ── 任务：风机基础巡检 ──
+    grid.set_mission(
+        start=(2, 2, 0),
+        waypoints=[
+            (4, 5, 0), (10, 5, 0), (16, 5, 0), (22, 5, 0),
+            (22, 13, 0), (16, 13, 0), (10, 13, 0), (4, 13, 0),
+            (4, 21, 0), (10, 21, 0), (16, 21, 0), (22, 21, 0),
+            (14, 14, 0),  # 升压站
+        ],
+        end=(2, 2, 0),
+    )
+    return grid
